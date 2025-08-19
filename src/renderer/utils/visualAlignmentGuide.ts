@@ -38,16 +38,16 @@ export class VisualAlignmentGuide {
   
   private defaultConfig: GuideConfig = {
     targetRegion: {
-      x: 0.1,       // 10% from left
-      y: 0.35,      // 35% from top - center area for bottom edge
-      width: 0.8,   // 80% of width - full card width
-      height: 0.3   // 30% of height - just for bottom edge
+      x: 0.2,       // 20% from left
+      y: 0.5,       // 50% from top - lower half where card bottom should be
+      width: 0.6,   // 60% of width - card width
+      height: 0.2   // 20% of height - just the bottom edge area
     },
-    processRegion: {  // Same as target - we're only scanning bottom edge
-      x: 0.1,       // 10% from left
-      y: 0.3,       // 30% from top
-      width: 0.8,   // 80% width
-      height: 0.4   // 40% height
+    processRegion: {  // Where we're actually looking for text
+      x: 0.3,       // 30% from left
+      y: 0.6,       // 60% from top - collector number area
+      width: 0.4,   // 40% width - covering both number and set code
+      height: 0.1   // 10% height - text line height
     },
     colors: {
       idle: 'rgba(255, 255, 255, 0.3)',

@@ -29,17 +29,17 @@ export class StreamingROIManager {
   private roiDefinitions: ROIDefinition[] = [
     {
       name: 'collector_number',
-      bounds: { x: 0.02, y: 0.35, width: 0.4, height: 0.35 }, // Wider left area
+      bounds: { x: 0.3, y: 0.6, width: 0.2, height: 0.1 }, // Bottom-center-left for collector number
       preprocessVariants: ['otsu', 'adaptive', 'sauvola']
     },
     {
       name: 'set_code', 
-      bounds: { x: 0.35, y: 0.35, width: 0.35, height: 0.35 }, // Middle-to-right area
+      bounds: { x: 0.5, y: 0.6, width: 0.2, height: 0.1 }, // Bottom-center-right for set code
       preprocessVariants: ['otsu', 'sauvola', 'adaptive']
     },
     {
       name: 'footer',
-      bounds: { x: 0.02, y: 0.25, width: 0.95, height: 0.5 }, // Larger area to catch more
+      bounds: { x: 0.2, y: 0.5, width: 0.6, height: 0.2 }, // Wider area covering potential card bottom
       preprocessVariants: ['otsu', 'sauvola']
     }
   ];

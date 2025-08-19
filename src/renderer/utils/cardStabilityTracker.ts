@@ -381,14 +381,14 @@ export class CardStabilityTracker {
     const extractWidth = sourceWidth;
     const extractHeight = sourceHeight;
     
-    // Draw the bottom-left corner, scaled to fill the target canvas
-    ctx.drawImage(
-      source, 
-      extractX, extractY, extractWidth, extractHeight,  // Source rectangle (bottom-left corner)
-      0, 0, target.width, target.height                 // Destination (full canvas)
-    );
+    // Draw the entire source to target for now (no cropping)
+    ctx.drawImage(source, 0, 0, target.width, target.height);
     
-    console.log(`[Stability] Extracted bottom-left: ${extractWidth}x${extractHeight} from (${extractX},${extractY})`);
+    // Verify we actually have image data
+    const testData = ctx.getImageData(target.width/2, target.height/2, 1, 1).data;
+    const hasContent = testData[0] > 0 || testData[1] > 0 || testData[2] > 0;
+    
+    console.log(`[Stability] Drew full frame ${sourceWidth}x${sourceHeight} to ${target.width}x${target.height}, has content: ${hasContent}`);
   }
 }
 
