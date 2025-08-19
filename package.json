@@ -1,0 +1,50 @@
+{
+  "name": "cardscanner",
+  "version": "1.0.0",
+  "main": ".vite/build/index.js",
+  "scripts": {
+    "start": "electron-forge start",
+    "dev": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "eslint --ext .ts,.tsx,.vue src",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@electron-forge/cli": "^7.8.3",
+    "@electron-forge/maker-deb": "^7.8.3",
+    "@electron-forge/maker-rpm": "^7.8.3",
+    "@electron-forge/maker-squirrel": "^7.8.3",
+    "@electron-forge/maker-zip": "^7.8.3",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.8.3",
+    "@electron-forge/plugin-fuses": "^7.8.3",
+    "@electron-forge/plugin-vite": "^7.8.3",
+    "@electron/fuses": "^1.8.0",
+    "@swc/core": "^1.13.3",
+    "@types/node": "^24.3.0",
+    "@vitejs/plugin-vue": "^6.0.1",
+    "electron": "^37.3.0",
+    "typescript": "^5.9.2",
+    "unplugin-swc": "^1.5.6",
+    "vite": "^7.1.2",
+    "vue-tsc": "^3.0.5"
+  },
+  "dependencies": {
+    "axios": "^1.11.0",
+    "electron-squirrel-startup": "^1.0.1",
+    "jimp": "^1.6.0",
+    "opencv.js": "^1.2.1",
+    "reflect-metadata": "^0.2.2",
+    "sharp": "^0.34.3",
+    "sqlite3": "^5.1.7",
+    "tesseract.js": "^6.0.1",
+    "typeorm": "^0.3.26",
+    "vue": "^3.5.18",
+    "vue-router": "^4.5.1"
+  }
+}
