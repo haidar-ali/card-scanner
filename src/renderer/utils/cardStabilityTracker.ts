@@ -25,6 +25,9 @@ export class CardStabilityTracker {
   private poseHistory: CardPose[] = [];
   private stabilityHistory: boolean[] = [];
   private readonly HISTORY_SIZE = 10;
+  private loggedDrawInfo = false;
+  private loggedRectified = false;
+  private loggedVideoState = false;
   
   // Thresholds
   private readonly MOTION_THRESHOLD = 5; // pixels
@@ -47,7 +50,6 @@ export class CardStabilityTracker {
     if (!cardDetection.found) {
       // For now, always assume card is present to test the pipeline
       // In production, implement proper card detection
-      console.log('[Stability] Card detection bypassed - assuming card present');
       cardDetection.found = true;
       cardDetection.corners = this.getDefaultCorners(canvas.width, canvas.height);
     }
@@ -131,6 +133,18 @@ export class CardStabilityTracker {
       if (stableFrames < 2) return null;
     }
     
+    // Debug video state
+    if (!this.loggedVideoState) {
+      console.log(`[Stability] Video state: width=${video.videoWidth}, height=${video.videoHeight}, readyState=${video.readyState}, paused=${video.paused}`);
+      this.loggedVideoState = true;
+    }
+    
+    // Make sure video has valid dimensions
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      console.warn('[Stability] Video has invalid dimensions!');
+      return null;
+    }
+    
     // Create rectified canvas matching video dimensions for now
     const rectifiedCanvas = document.createElement('canvas');
     const ctx = rectifiedCanvas.getContext('2d', { willReadFrequently: true })!;
@@ -142,7 +156,11 @@ export class CardStabilityTracker {
     // Apply inverse homography to get top-down view
     this.applyPerspectiveTransform(video, rectifiedCanvas, this.lastPose.homography);
     
-    console.log('[Stability] Returning rectified crop');
+    // Only log first rectified crop
+    if (!this.loggedRectified) {
+      console.log('[Stability] Returning rectified crop');
+      this.loggedRectified = true;
+    }
     return rectifiedCanvas;
   }
   
@@ -369,6 +387,8 @@ export class CardStabilityTracker {
   ): void {
     const ctx = target.getContext('2d', { willReadFrequently: true })!;
     
+    // Don't fill with white - we want the actual video content!
+    
     // For testing, extract just the bottom-left corner where collector number is
     // This simulates what a proper homography transform would do
     const sourceHeight = source instanceof HTMLVideoElement ? source.videoHeight : source.height;
@@ -382,13 +402,35 @@ export class CardStabilityTracker {
     const extractHeight = sourceHeight;
     
     // Draw the entire source to target for now (no cropping)
-    ctx.drawImage(source, 0, 0, target.width, target.height);
+    ctx.drawImage(source, 0, 0, sourceWidth, sourceHeight, 0, 0, target.width, target.height);
     
     // Verify we actually have image data
     const testData = ctx.getImageData(target.width/2, target.height/2, 1, 1).data;
-    const hasContent = testData[0] > 0 || testData[1] > 0 || testData[2] > 0;
+    const hasContent = testData[0] !== 255 || testData[1] !== 255 || testData[2] !== 255; // Check if not pure white
     
-    console.log(`[Stability] Drew full frame ${sourceWidth}x${sourceHeight} to ${target.width}x${target.height}, has content: ${hasContent}`);
+    // Debug: Check multiple points
+    const corners = [
+      ctx.getImageData(0, 0, 1, 1).data,
+      ctx.getImageData(target.width-1, 0, 1, 1).data,
+      ctx.getImageData(0, target.height-1, 1, 1).data,
+      ctx.getImageData(target.width-1, target.height-1, 1, 1).data
+    ];
+    
+    const allWhite = corners.every(c => c[0] === 255 && c[1] === 255 && c[2] === 255);
+    
+    // Only log if we don't have content (error case) or first time
+    if (allWhite && !this.loggedDrawInfo) {
+      console.log(`[Stability] Warning: Canvas is all white after drawing video!`);
+      console.log(`[Stability] Video dimensions: ${sourceWidth}x${sourceHeight}, Canvas: ${target.width}x${target.height}`);
+      console.log(`[Stability] Video element:`, source instanceof HTMLVideoElement ? 'Is video element' : 'Is canvas');
+      if (source instanceof HTMLVideoElement) {
+        console.log(`[Stability] Video state: paused=${source.paused}, ended=${source.ended}, readyState=${source.readyState}`);
+      }
+      this.loggedDrawInfo = true;
+    } else if (!this.loggedDrawInfo) {
+      console.log(`[Stability] Initial draw: ${sourceWidth}x${sourceHeight} to ${target.width}x${target.height}, has content: ${hasContent}`);
+      this.loggedDrawInfo = true;
+    }
   }
 }
 

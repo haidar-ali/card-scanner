@@ -194,16 +194,9 @@ export class StreamingOCRService {
         this.status.isStable = metrics.isStable;
         this.status.stabilityScore = metrics.stabilityScore;
         
-        // Debug logging every 30 frames (1 second)
-        if (this.frameCounters.fast % 30 === 0 && this.config.debugMode) {
-          console.log(`[FastLoop] Status:`, {
-            cardPresent: metrics.cardPresent,
-            isStable: metrics.isStable,
-            stabilityScore: metrics.stabilityScore.toFixed(2),
-            sharpness: metrics.sharpnessScore.toFixed(1),
-            motion: metrics.motionDelta.toFixed(1),
-            consecutiveStable: metrics.consecutiveStableFrames
-          });
+        // Debug logging every 150 frames (5 seconds) - reduced frequency
+        if (this.frameCounters.fast % 150 === 0 && this.config.debugMode) {
+          console.log(`[FastLoop] Heartbeat - stable: ${metrics.isStable}, score: ${metrics.stabilityScore.toFixed(2)}`);
         }
         
         // Emit event if stability changed
@@ -254,7 +247,10 @@ export class StreamingOCRService {
           return;
         }
         
-        console.log('[MediumLoop] Processing ROIs from rectified canvas');
+        // Only log processing occasionally to reduce noise
+        if (this.frameCounters.medium % 20 === 0) {
+          console.log('[MediumLoop] Processing ROIs...');
+        }
         
         // Process ROIs
         const roiResults = await streamingROIManager.processROIs(
@@ -279,10 +275,7 @@ export class StreamingOCRService {
           
           if (symbolResults.length > 0) {
             this.symbolCandidates = symbolResults;
-            
-            if (this.config.debugMode) {
-              console.log(`[MediumLoop] Symbol candidates:`, symbolResults.map(s => `${s.setCode}(${s.confidence.toFixed(2)})`));
-            }
+            // Symbol classification is disabled, so this shouldn't log
           }
         }
         
@@ -300,13 +293,7 @@ export class StreamingOCRService {
           symbolCandidates: this.symbolCandidates
         });
         
-        if (this.config.debugMode && roiResults.hypotheses.size > 0) {
-          console.log(`[MediumLoop] Hypotheses:`, 
-            Array.from(roiResults.hypotheses.entries()).map(([field, hyps]) => 
-              `${field}: ${hyps[0]?.text || 'none'}`
-            )
-          );
-        }
+        // Hypothesis logging is already done in ROIManager when text is detected
       } catch (error) {
         console.error('[MediumLoop] Error:', error);
       }

@@ -29,17 +29,17 @@ export class StreamingROIManager {
   private roiDefinitions: ROIDefinition[] = [
     {
       name: 'collector_number',
-      bounds: { x: 0.3, y: 0.6, width: 0.2, height: 0.1 }, // Bottom-center-left for collector number
+      bounds: { x: 0.05, y: 0.85, width: 0.25, height: 0.08 }, // Very bottom-left - where "204/205" would be
       preprocessVariants: ['otsu', 'adaptive', 'sauvola']
     },
     {
       name: 'set_code', 
-      bounds: { x: 0.5, y: 0.6, width: 0.2, height: 0.1 }, // Bottom-center-right for set code
+      bounds: { x: 0.75, y: 0.85, width: 0.2, height: 0.08 }, // Very bottom-right - where "EMN" would be
       preprocessVariants: ['otsu', 'sauvola', 'adaptive']
     },
     {
       name: 'footer',
-      bounds: { x: 0.2, y: 0.5, width: 0.6, height: 0.2 }, // Wider area covering potential card bottom
+      bounds: { x: 0.05, y: 0.8, width: 0.9, height: 0.15 }, // Entire bottom strip for debugging
       preprocessVariants: ['otsu', 'sauvola']
     }
   ];
@@ -55,7 +55,7 @@ export class StreamingROIManager {
       try {
         this.worker = await Tesseract.createWorker('eng', 1, {
           logger: (m) => {
-            // Only log important messages
+            // Only log important messages, suppress verbose statistics
             if (m.status === 'initializing tesseract' || m.status === 'loading language traineddata') {
               console.log(`[ROIManager] ${m.status}`);
             }
@@ -66,7 +66,8 @@ export class StreamingROIManager {
           tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/-',  // Just what we need for collector numbers and set codes
           tessedit_pageseg_mode: '7', // Single text line - might work better than single word
           preserve_interword_spaces: '1',  // Keep spaces to detect multiple parts
-          tessedit_min_orientation_margin: '0'  // Help with slightly rotated text
+          tessedit_min_orientation_margin: '0',  // Help with slightly rotated text
+          debug_file: '/dev/null'  // Suppress debug output
         });
         
         console.log('[ROIManager] Tesseract worker initialized');
@@ -104,8 +105,10 @@ export class StreamingROIManager {
       this.cachedROIs.set(roi.name, extracted);
       
       // First try without ANY preprocessing
-      const rawResult = await this.runQuickOCR(extracted);
-      console.log(`[ROI] ${roi.name} (RAW): "${rawResult.text}" (conf: ${rawResult.confidence.toFixed(2)})`);
+      const rawResult = await this.runQuickOCR(extracted, roi.name);
+      if (rawResult.text.length > 0) {
+        console.log(`[ROI] ${roi.name} (RAW): "${rawResult.text}" (conf: ${rawResult.confidence.toFixed(2)})`);
+      }
       
       if (rawResult.confidence > 0.3 && rawResult.text.length > 0) {
         const hypothesis: OCRHypothesis = {
@@ -121,10 +124,12 @@ export class StreamingROIManager {
       // Then try with preprocessing variants
       for (const variant of roi.preprocessVariants) {
         const processed = this.preprocessROI(extracted, variant);
-        const result = await this.runQuickOCR(processed);
+        const result = await this.runQuickOCR(processed, roi.name);
         
-        // Log ALL OCR attempts for debugging
-        console.log(`[ROI] ${roi.name} (${variant}): "${result.text}" (conf: ${result.confidence.toFixed(2)})`);
+        // Only log if we detected something
+        if (result.text.length > 0) {
+          console.log(`[ROI] ${roi.name} (${variant}): "${result.text}" (conf: ${result.confidence.toFixed(2)})`);
+        }
         
         if (result.confidence > 0.3 && result.text.length > 0) { // Lower threshold to see more detections
           const hypothesis: OCRHypothesis = {
@@ -167,9 +172,20 @@ export class StreamingROIManager {
     
     // First check if source canvas has any content
     const sourceCtx = source.getContext('2d', { willReadFrequently: true })!;
-    const sourceData = sourceCtx.getImageData(0, 0, 1, 1).data;
-    if (sourceData[0] === 0 && sourceData[1] === 0 && sourceData[2] === 0 && sourceData[3] === 0) {
-      console.warn(`[ExtractROI] Source canvas appears empty for ${roi.name}`);
+    
+    // Check center pixel
+    const centerX = Math.floor(source.width / 2);
+    const centerY = Math.floor(source.height / 2);
+    const centerData = sourceCtx.getImageData(centerX, centerY, 1, 1).data;
+    
+    // Check if it's all white
+    const isWhite = centerData[0] === 255 && centerData[1] === 255 && centerData[2] === 255;
+    const isEmpty = centerData[0] === 0 && centerData[1] === 0 && centerData[2] === 0 && centerData[3] === 0;
+    
+    if (isEmpty || isWhite) {
+      console.warn(`[ExtractROI] Source canvas issue for ${roi.name}: isEmpty=${isEmpty}, isWhite=${isWhite}`);
+      console.warn(`[ExtractROI] Source dimensions: ${source.width}x${source.height}`);
+      console.warn(`[ExtractROI] Center pixel RGBA: [${centerData[0]}, ${centerData[1]}, ${centerData[2]}, ${centerData[3]}]`);
     }
     
     // Convert normalized bounds to pixel coordinates
@@ -377,26 +393,57 @@ export class StreamingROIManager {
     }
   }
   
-  private async runQuickOCR(canvas: HTMLCanvasElement): Promise<{ text: string; confidence: number }> {
+  private async runQuickOCR(canvas: HTMLCanvasElement, field?: string): Promise<{ text: string; confidence: number }> {
     if (!this.worker) {
       await this.initialize();
     }
     
     try {
-      // Debug: Log canvas dimensions
-      console.log(`[OCR Debug] Canvas size: ${canvas.width}x${canvas.height}`);
-      
-      // Convert canvas to data URL for debugging (only log first time)
-      if (!this.debugged) {
-        const dataUrl = canvas.toDataURL();
-        console.log(`[OCR Debug] Sample image (copy to browser): ${dataUrl.substring(0, 100)}...`);
-        this.debugged = true;
+      // Debug: Log canvas dimensions only once per ROI type
+      if (!this.debuggedSizes.has(`${field}_${canvas.width}x${canvas.height}`)) {
+        console.log(`[OCR Debug] ${field} canvas size: ${canvas.width}x${canvas.height}`);
+        this.debuggedSizes.add(`${field}_${canvas.width}x${canvas.height}`);
       }
       
-      const { data } = await this.worker!.recognize(canvas);
+      // Check canvas content before OCR
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      
+      // Check if canvas is all white or empty
+      let hasNonWhitePixels = false;
+      let totalPixels = 0;
+      let whitePixels = 0;
+      
+      for (let i = 0; i < data.length; i += 4) {
+        totalPixels++;
+        if (data[i] === 255 && data[i + 1] === 255 && data[i + 2] === 255) {
+          whitePixels++;
+        } else if (data[i] < 240 || data[i + 1] < 240 || data[i + 2] < 240) {
+          hasNonWhitePixels = true;
+        }
+      }
+      
+      const whitePercentage = (whitePixels / totalPixels) * 100;
+      
+      // Convert canvas to data URL for debugging (only log first time for each field)
+      if (!this.debuggedFields.has(field || 'unknown')) {
+        const dataUrl = canvas.toDataURL();
+        console.log(`[OCR Debug] ${field} content check: ${whitePercentage.toFixed(1)}% white, hasContent: ${hasNonWhitePixels}`);
+        console.log(`[OCR Debug] ${field} sample: ${dataUrl}`);
+        
+        this.debuggedFields.add(field || 'unknown');
+      }
+      
+      // If canvas is mostly white, skip OCR to reduce noise
+      if (whitePercentage > 95) {
+        return { text: '', confidence: 0 };
+      }
+      
+      const { data: ocrData } = await this.worker!.recognize(canvas);
       return {
-        text: data.text.trim(),
-        confidence: data.confidence / 100
+        text: ocrData.text.trim(),
+        confidence: ocrData.confidence / 100
       };
     } catch (error) {
       console.warn('[ROIManager] OCR failed:', error);
@@ -405,6 +452,8 @@ export class StreamingROIManager {
   }
   
   private debugged = false;
+  private debuggedSizes = new Set<string>();
+  private debuggedFields = new Set<string>();
   
   private addHypothesis(field: string, hypothesis: OCRHypothesis): void {
     if (!this.currentHypotheses.has(field)) {
