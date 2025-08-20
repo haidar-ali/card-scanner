@@ -1,19 +1,37 @@
 <template>
   <div class="scanner-view">
     <div class="scanner-header">
-      <h2>Card Scanner - Streaming Pipeline</h2>
+      <h2>Card Scanner</h2>
       <div class="scanner-controls">
         <select v-model="selectedCamera" @change="initCamera" :disabled="isProcessing">
           <option v-for="device in cameras" :key="device.deviceId" :value="device.deviceId">
             {{ device.label || `Camera ${cameras.indexOf(device) + 1}` }}
           </option>
         </select>
-        <button @click="toggleCamera" :disabled="isProcessing">
+        <button @click="toggleCamera" :disabled="isProcessing || !visionApiKey">
           {{ cameraActive ? 'Stop Camera' : 'Start Camera' }}
         </button>
-        <button @click="toggleRealTime" :disabled="!cameraActive" class="mode-toggle">
-          {{ realTimeMode ? 'Switch to Snapshot' : 'Switch to Streaming' }}
-        </button>
+        
+        <!-- Stability indicator -->
+        <div v-if="cameraActive" class="stability-indicator-compact">
+          <span class="stability-text" :style="{ color: streamingStatus.isStable ? '#4CAF50' : '#FFC107' }">
+            {{ streamingStatus.isStable ? '● Stable' : '● Hold steady' }}
+          </span>
+          <div class="stability-bar-compact">
+            <div class="stability-fill" :style="{ 
+              width: `${streamingStatus.stabilityScore * 100}%`,
+              backgroundColor: streamingStatus.isStable ? '#4CAF50' : '#FFC107'
+            }"></div>
+          </div>
+        </div>
+        
+        <!-- Scan status -->
+        <span v-if="cameraActive" class="scan-status-text">{{ scanStatus }}</span>
+      </div>
+      
+      <!-- Vision API status/warning -->
+      <div v-if="!visionApiKey" class="api-key-warning">
+        <span>⚠️ Google Vision API key required. Please configure in <router-link to="/settings">Settings</router-link></span>
       </div>
     </div>
 
@@ -23,48 +41,30 @@
         <canvas ref="overlayCanvas" class="overlay-canvas"></canvas>
         <canvas ref="canvasElement" :style="{ display: showCanvas ? 'block' : 'none' }"></canvas>
         <canvas ref="processCanvas" style="display: none;"></canvas>
-        <div v-if="cameraActive" class="capture-overlay">
-          <div class="scan-status">
-            <span :class="['status-indicator', { 
-              active: isScanning, 
-              stable: streamingStatus.isStable,
-              processing: streamingStatus.cardPresent && !streamingStatus.isStable 
-            }]"></span>
-            <span>{{ scanStatus }}</span>
+        
+        <!-- Success checkmark overlay -->
+        <div v-if="showSuccessCheckmark" class="success-checkmark">
+          <div class="checkmark-circle">
+            <svg width="80" height="80" viewBox="0 0 80 80">
+              <circle cx="40" cy="40" r="38" stroke="#4CAF50" stroke-width="4" fill="none" />
+              <path d="M20 40 L32 52 L60 24" stroke="#4CAF50" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </div>
-          
-          <!-- Streaming status display -->
-          <div v-if="realTimeMode" class="streaming-status">
-            <div class="stability-indicator">
-              <div class="stability-bar">
-                <div class="stability-fill" :style="{ 
-                  width: `${streamingStatus.stabilityScore * 100}%`,
-                  backgroundColor: streamingStatus.isStable ? '#4CAF50' : '#FFC107'
-                }"></div>
-              </div>
-              <span class="stability-label">{{ streamingStatus.isStable ? 'Stable' : 'Hold steady...' }}</span>
-            </div>
-            
-            <!-- Live hypotheses display -->
-            <div v-if="streamingHypotheses.size > 0" class="live-hypotheses">
-              <div v-for="[field, data] in streamingHypotheses" :key="field" class="hypothesis-row">
-                <span class="field-name">{{ field }}:</span>
-                <span class="field-value">{{ data.value }}</span>
-                <span class="field-confidence">({{ Math.round(data.confidence * 100) }}%)</span>
-              </div>
-            </div>
-            
-            <!-- FPS display in debug mode -->
-            <div v-if="debugMode" class="fps-display">
-              <span>Fast: {{ streamingStatus.fps.fast.toFixed(1) }}fps</span>
-              <span>Med: {{ streamingStatus.fps.medium.toFixed(1) }}fps</span>
-              <span>Slow: {{ streamingStatus.fps.slow.toFixed(1) }}fps</span>
-            </div>
+          <p>Card scanned! You can change the card now.</p>
+        </div>
+      </div>
+      
+      
+      <!-- Debug ROI Panel -->
+      <div v-if="debugMode" class="debug-panel">
+        <h4>ROI Debug View</h4>
+        <div class="debug-images">
+          <div v-for="[field, dataUrl] in debugCanvases" :key="field" class="debug-image">
+            <label>{{ field }}</label>
+            <img v-if="dataUrl && dataUrl.startsWith('data:')" :src="dataUrl" :alt="field" />
+            <div v-else class="no-image">No image</div>
+            <span class="debug-text">{{ streamingHypotheses.get(field)?.value || 'N/A' }}</span>
           </div>
-          
-          <button v-if="!realTimeMode" @click="captureImage" :disabled="isProcessing" class="capture-btn">
-            {{ isProcessing ? 'Processing...' : 'Scan Card' }}
-          </button>
         </div>
       </div>
 
@@ -164,6 +164,10 @@ import { extractMagicCardInfo } from '../utils/cardOCROptimizer';
 import { frameQualityAnalyzer, type QualityMetrics } from '../utils/frameQualityAnalyzer';
 import { visualAlignmentGuide, type ScanState } from '../utils/visualAlignmentGuide';
 import { streamingOCRService, type StreamingStatus, type StreamingEvent } from '../utils/streamingOCRService';
+import { streamingROIManager } from '../utils/streamingROIManager';
+import { getVisionService, setVisionApiKey } from '../utils/googleVisionService';
+import { temporalOCRFusion } from '../utils/temporalOCRFusion';
+import { canvasCardDetector, type CardBounds } from '../utils/canvasCardDetector';
 import magicSetsData from '../data/magicSets.json';
 
 const videoElement = ref<HTMLVideoElement>();
@@ -188,9 +192,17 @@ interface ScannedCard {
   detectedAt: Date;
 }
 const scannedCards = ref<ScannedCard[]>([]);
-const realTimeMode = ref(false);
+const realTimeMode = ref(true); // Always true now, no toggle
 const currentConfidence = ref(0);
+
+// Vision AI Configuration
+const visionApiKey = ref(''); // Loaded from settings
+// Vision AI is always used now - no toggle
+const visionEnabled = ref(false);
+const visionProcessing = ref(false); // Track if Vision AI is currently processing
+const lastStabilityState = ref(false); // Track stability state changes
 const scanStatus = ref('Initializing OCR...');
+const showSuccessCheckmark = ref(false); // Show checkmark when card is scanned
 const showCanvas = ref(false);
 const showMetrics = ref(false); // Show quality metrics debug info
 const debugMode = ref(true); // Show FPS and debug info - ENABLED FOR TESTING
@@ -213,6 +225,9 @@ const streamingStatus = ref<StreamingStatus>({
   fps: { fast: 0, medium: 0, slow: 0 }
 });
 const streamingHypotheses = computed(() => streamingStatus.value.currentHypotheses);
+
+// Debug canvases for ROI visualization
+const debugCanvases = ref<Map<string, string>>(new Map());
 
 // Smart OCR state machine
 type SmartOCRState = 'idle' | 'monitoring' | 'stable' | 'processing' | 'cooldown';
@@ -287,22 +302,21 @@ async function processOCRResult(result: any) {
     return;
   }
   
-  // Check if OCR result already has card info extracted
-  let cardInfo: { setCode: string; cardNumber: string } | null = null;
-  
-  if (result.setCode && result.cardNumber) {
-    // Enhanced OCR already extracted the info
-    cardInfo = {
-      setCode: result.setCode,
-      cardNumber: result.cardNumber
-    };
-    console.log('[Scanner] Using pre-extracted card info:', cardInfo);
-  } else if (result.text) {
-    // Legacy path - extract from text
-    console.log('[Scanner] Extracting card info from text:', result.text);
-    cardInfo = extractCardInfo(result.text);
+  // Skip all OCR processing if Vision AI is enabled
+  if (visionEnabled.value) {
+    console.log('[Scanner] Vision AI enabled - skipping OCR processing');
+    return;
   }
   
+  // Only process OCR if Vision AI is not available
+  if (!visionEnabled.value) {
+    console.log('[Scanner] Vision AI not available - please configure Vision AI key');
+    scanStatus.value = 'Vision AI required - please add API key';
+    return;
+  }
+  
+  // This code should never be reached since we require Vision AI
+  let cardInfo: { setCode: string; cardNumber: string } | null = null;
   if (cardInfo) {
     console.log('[Scanner] Card info found:', cardInfo, 'confidence:', result.confidence);
     const key = `${cardInfo.setCode}/${cardInfo.cardNumber}`;
@@ -409,7 +423,8 @@ function stopCamera() {
     stream = null;
   }
   cameraActive.value = false;
-  realTimeMode.value = false;
+  // Don't change realTimeMode - it should always be true now
+  // realTimeMode.value = false;  // REMOVED - was breaking restart
   stopSmartMonitoring();
 }
 
@@ -566,19 +581,671 @@ function processVideoFrame() {
   }
 }
 
-function toggleRealTime() {
-  realTimeMode.value = !realTimeMode.value;
+// Removed toggleRealTime - always streaming now
+
+// Card border detection using OpenCV for accurate card boundaries
+async function detectCardBounds(canvas: HTMLCanvasElement): Promise<{x: number, y: number, width: number, height: number, confidence: number} | null> {
+  const cardBounds = await canvasCardDetector.detectCard(canvas);
   
-  if (realTimeMode.value) {
-    // Use new streaming pipeline
-    scanStatus.value = 'Streaming mode - position card';
-    detectedCards.clear();
-    startStreamingPipeline();
-  } else {
-    scanStatus.value = 'Snapshot mode';
-    stopStreamingPipeline();
+  if (!cardBounds) {
+    // Commented out for cleaner logs - too frequent
+    // console.log('[CardDetection] No card detected');
+    return null;
+  }
+  
+  console.log('[CardDetection] Canvas detector found card:', {
+    bounds: cardBounds,
+    confidence: `${(cardBounds.confidence * 100).toFixed(0)}%`
+  });
+  
+  // Extract bottom portion of the detected card
+  const bottomCropRatio = 0.25; // Bottom 25% for collector info
+  const bottomHeight = Math.floor(cardBounds.height * bottomCropRatio);
+  const bottomY = cardBounds.y + cardBounds.height - bottomHeight;
+  
+  return {
+    x: cardBounds.x,
+    y: bottomY,
+    width: cardBounds.width,
+    height: bottomHeight,
+    confidence: cardBounds.confidence // Include confidence for threshold check
+  };
+}
+
+// Legacy edge detection method (keeping for reference but not using)
+async function detectCardBoundsLegacy(canvas: HTMLCanvasElement): Promise<{x: number, y: number, width: number, height: number} | null> {
+  try {
+    console.log('[CardDetection] Detecting card boundaries using edge detection...');
+    
+    const ctx = canvas.getContext('2d')!;
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    
+    // Convert to grayscale for edge detection
+    const grayscale = new Uint8ClampedArray(canvas.width * canvas.height);
+    for (let i = 0; i < data.length; i += 4) {
+      const gray = Math.floor(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+      grayscale[i / 4] = gray;
+    }
+    
+    // Detect edges using simple gradient approach
+    // Scan from center outward to find card boundaries
+    const centerX = Math.floor(canvas.width / 2);
+    const centerY = Math.floor(canvas.height / 2);
+    
+    // Helper function to check if position has strong edge
+    const hasEdge = (x: number, y: number, threshold: number = 30): boolean => {
+      if (x <= 1 || x >= canvas.width - 2 || y <= 1 || y >= canvas.height - 2) return false;
+      
+      const idx = y * canvas.width + x;
+      const center = grayscale[idx];
+      
+      // Check horizontal and vertical gradients
+      const left = grayscale[idx - 1];
+      const right = grayscale[idx + 1];
+      const top = grayscale[idx - canvas.width];
+      const bottom = grayscale[idx + canvas.width];
+      
+      const hGrad = Math.abs(right - left);
+      const vGrad = Math.abs(bottom - top);
+      
+      return Math.max(hGrad, vGrad) > threshold;
+    };
+    
+    // Find card boundaries by scanning from center
+    let cardLeft = centerX;
+    let cardRight = centerX;
+    let cardTop = centerY;
+    let cardBottom = centerY;
+    
+    // Find card edges more accurately by looking for consistent edges
+    let foundLeft = false, foundRight = false, foundTop = false, foundBottom = false;
+    
+    // Scan left from center - look for vertical edge
+    // Continue scanning to find the actual left edge
+    let lastValidLeft = centerX;
+    for (let x = centerX; x > 20; x -= 2) {
+      let edgeCount = 0;
+      // Check vertical line for edges
+      for (let y = centerY - 100; y <= centerY + 100; y += 5) {
+        if (hasEdge(x, y, 25)) edgeCount++;
+      }
+      // Keep updating left as long as we find edges
+      if (edgeCount >= 8) {
+        lastValidLeft = x ; // Add small offset to stay inside card
+        foundLeft = true;
+      } else if (foundLeft && edgeCount < 3) {
+        // We've passed the left edge
+        break;
+      }
+    }
+    cardLeft = lastValidLeft;
+    
+    // Scan right from center
+    let lastValidRight = centerX;
+    for (let x = centerX; x < canvas.width - 20; x += 2) {
+      let edgeCount = 0;
+      for (let y = centerY - 100; y <= centerY + 100; y += 5) {
+        if (hasEdge(x, y, 25)) edgeCount++;
+      }
+      if (edgeCount >= 8) {
+        lastValidRight = x; // Subtract small offset to stay inside card
+        foundRight = true;
+      } else if (foundRight && edgeCount < 3) {
+        // We've passed the right edge
+        break;
+      }
+    }
+    cardRight = lastValidRight;
+    
+    // Scan top from center - continue scanning to find the actual top edge
+    let lastValidTop = centerY;
+    for (let y = centerY; y > 20; y -= 2) {
+      let edgeCount = 0;
+      // Check horizontal line for edges
+      for (let x = centerX - 100; x <= centerX + 100; x += 5) {
+        if (hasEdge(x, y, 25)) edgeCount++;
+      }
+      // Keep updating top as long as we find edges
+      if (edgeCount >= 8) {
+        lastValidTop = y;
+        foundTop = true;
+      } else if (foundTop && edgeCount < 3) {
+        // We've passed the top edge
+        break;
+      }
+    }
+    cardTop = lastValidTop;
+    
+    // Scan bottom from center - continue scanning to find the actual bottom edge
+    // Don't stop at the first edge, keep going to find the card's actual bottom
+    let lastValidBottom = centerY;
+    for (let y = centerY; y < canvas.height - 20; y += 2) {
+      let edgeCount = 0;
+      for (let x = centerX - 100; x <= centerX + 100; x += 5) {
+        if (hasEdge(x, y, 25)) edgeCount++;
+      }
+      // Keep updating bottom as long as we find edges
+      if (edgeCount >= 8) {
+        lastValidBottom = y;
+        foundBottom = true;
+      } else if (foundBottom && edgeCount < 3) {
+        // We've passed the bottom edge
+        break;
+      }
+    }
+    cardBottom = lastValidBottom;
+    
+    // Check if we found all edges
+    const allEdgesFound = foundLeft && foundRight && foundTop && foundBottom;
+    
+    if (!allEdgesFound) {
+      console.log('[CardDetection] Not all edges found:', {foundLeft, foundRight, foundTop, foundBottom});
+      // Use wider search if initial edge detection failed
+      if (!foundLeft) cardLeft = Math.max(20, centerX - 200);
+      if (!foundRight) cardRight = Math.min(canvas.width - 20, centerX + 200);  
+      if (!foundTop) cardTop = Math.max(20, centerY - 250);
+      if (!foundBottom) cardBottom = Math.min(canvas.height - 20, centerY + 250);
+    }
+    
+    // Ensure we have valid dimensions (not zero width or height)
+    if (cardRight <= cardLeft) {
+      console.log('[CardDetection] Invalid width detected, using default width');
+      const defaultCardWidth = Math.floor(canvas.width * 0.4);
+      cardLeft = centerX - defaultCardWidth / 2;
+      cardRight = centerX + defaultCardWidth / 2;
+    }
+    
+    if (cardBottom <= cardTop) {
+      console.log('[CardDetection] Invalid height detected, using default height');
+      const defaultCardHeight = Math.floor(canvas.height * 0.7);
+      cardTop = centerY - defaultCardHeight / 2;
+      cardBottom = centerY + defaultCardHeight / 2;
+    }
+    
+    const cardWidth = cardRight - cardLeft;
+    const cardHeight = cardBottom - cardTop;
+    
+    // Validate detected card
+    const aspectRatio = cardWidth / cardHeight;
+    const areaRatio = (cardWidth * cardHeight) / (canvas.width * canvas.height);
+    
+    console.log('[CardDetection] Found card region:', {
+      left: cardLeft, right: cardRight, top: cardTop, bottom: cardBottom,
+      width: cardWidth, height: cardHeight, aspectRatio: aspectRatio.toFixed(2)
+    });
+    
+    // More lenient validation - Magic cards can appear at various angles/distances
+    if (cardWidth < 100 || cardHeight < 140 || cardWidth > canvas.width * 0.9 || cardHeight > canvas.height * 0.9) {
+      console.log('[CardDetection] Invalid dimensions, adjusting to reasonable defaults');
+      // Use a reasonable center crop
+      const defaultWidth = Math.floor(canvas.width * 0.6);
+      const defaultHeight = Math.floor(defaultWidth / 0.714);
+      cardLeft = Math.floor((canvas.width - defaultWidth) / 2);
+      cardTop = Math.floor((canvas.height - defaultHeight) / 2);
+      cardRight = cardLeft + defaultWidth;
+      cardBottom = cardTop + defaultHeight;
+    }
+    
+    // Now extract the bottom portion of the DETECTED CARD (not the whole image)
+    // We want the bottom 25% of the actual card for collector info
+    // But shift it up slightly to catch the collector number area better
+    const bottomCropRatio = 0.30; // Bottom 30% of the card 
+    const cardActualHeight = cardBottom - cardTop;
+    // Shift up by 10% to better capture the collector info area (not the very bottom edge)
+    const bottomCropY = cardBottom - Math.floor(cardActualHeight * (bottomCropRatio + 0.05));
+    
+    // Use the detected card width but pull in the edges slightly to avoid background
+    // Negative margin means we crop IN from the detected edges
+    const horizontalMargin = -5; // Pull in by 10 pixels on each side
+    const finalX = Math.max(0, cardLeft - horizontalMargin);
+    const finalY = Math.max(0, bottomCropY);
+    const finalWidth = Math.min(cardRight - cardLeft + 2 * horizontalMargin, canvas.width - finalX);
+    const finalHeight = Math.min(cardBottom - bottomCropY + 5, canvas.height - finalY);
+    
+    console.log('[CardDetection] Card detected:', {
+      fullCard: {left: cardLeft, top: cardTop, right: cardRight, bottom: cardBottom},
+      cardDimensions: {width: cardRight - cardLeft, height: cardBottom - cardTop},
+      bottomCrop: {x: finalX, y: finalY, width: finalWidth, height: finalHeight},
+      bottomCropInfo: {
+        cropRatio: bottomCropRatio,
+        bottomCropY: bottomCropY,
+        cropHeight: cardBottom - bottomCropY
+      },
+      aspectRatio,
+      areaRatio,
+      canvasSize: `${canvas.width}x${canvas.height}`
+    });
+    
+    return {x: finalX, y: finalY, width: finalWidth, height: finalHeight};
+    
+  } catch (error) {
+    console.error('[CardDetection] Error detecting card bounds:', error);
+    return null;
   }
 }
+
+// Vision AI configuration handlers
+// Test Vision API connection
+async function testVisionConnection(apiKey: string): Promise<boolean> {
+  if (!apiKey) return false;
+  
+  try {
+    // Initialize Vision service with the API key
+    setVisionApiKey(apiKey);
+    const visionService = getVisionService();
+    
+    // Test the connection
+    const isValid = await visionService.testConnection();
+    
+    if (isValid) {
+      console.log('[Scanner] Vision API key validated successfully');
+    } else {
+      console.warn('[Scanner] Vision API key validation failed');
+    }
+    
+    return isValid;
+  } catch (error) {
+    console.error('[Scanner] Vision API test error:', error);
+    return false;
+  }
+}
+
+// Removed watch for useVisionAI - Vision AI is always used now
+
+// Debounce control for Vision AI
+let lastVisionTriggerTime = 0;
+const VISION_DEBOUNCE_MS = 3000; // Minimum 3 seconds between Vision AI calls
+
+// Track if we've already processed this stable state
+let lastProcessedStableId = 0;
+
+// Track consecutive frames with good card detection (not perfect stability)
+let consecutiveGoodFrames = 0;
+const REQUIRED_GOOD_FRAMES = 5; // Need 5 consecutive good frames (about 0.15 seconds at 30fps) - reduced for handheld
+let lastCardCheckTime = 0;
+const CARD_CHECK_INTERVAL = 100; // Check every 100ms
+let lastVisionAICallTime = 0;
+const VISION_AI_COOLDOWN = 3000; // 3 second cooldown between Vision AI calls
+
+// Two-tier confidence tracking
+let initialCardLocked = false;
+let lockedCardBounds: {x: number, y: number, width: number, height: number} | null = null;
+const INITIAL_MIN_CONFIDENCE = 0.55; // Higher confidence to start tracking
+const SUSTAINED_MIN_CONFIDENCE = 0.45; // Lower confidence once locked on
+const MAX_POSITION_DRIFT = 50; // Max pixels the card can move between frames
+const MAX_CARD_WIDTH = 400; // Cards shouldn't be wider than this (false detection)
+
+// Watch for card presence and reasonable stability (not perfect stability)
+watch(
+  () => ({
+    cardPresent: streamingStatus.value.cardPresent,
+    stabilityScore: streamingStatus.value.stabilityScore,
+    isStable: streamingStatus.value.isStable
+  }),
+  async ({ cardPresent, stabilityScore, isStable }) => {
+    // Check if we have a card with reasonable quality (not perfect stability)
+    const hasGoodCard = cardPresent && stabilityScore > 0.5; // Lowered from 0.7 to 0.5 for handheld
+
+    // Debounce check - prevent rapid triggers
+    const now = Date.now();
+    const timeSinceLastTrigger = now - lastVisionTriggerTime;
+    const timeSinceLastCheck = now - lastCardCheckTime;
+    
+    // Don't check too frequently
+    if (timeSinceLastCheck < CARD_CHECK_INTERVAL) {
+      return;
+    }
+    lastCardCheckTime = now;
+    
+    // Skip if we're processing
+    if (visionProcessing.value) {
+      return;
+    }
+    
+    // Skip if we're still in cooldown from last Vision AI call
+    const timeSinceLastVisionCall = now - lastVisionAICallTime;
+    if (timeSinceLastVisionCall < VISION_AI_COOLDOWN) {
+      return;
+    }
+    
+    // Check conditions for Vision AI trigger (with debounce)
+    if (hasGoodCard && !visionProcessing.value && 
+        visionEnabled.value &&
+        timeSinceLastTrigger > VISION_DEBOUNCE_MS) {
+
+      // Pre-capture confidence check - don't even stop streaming if confidence is too low
+      const preCheckCanvas = document.createElement('canvas');
+      const preCtx = preCheckCanvas.getContext('2d')!;
+      
+      // Use fixed dimensions if processCanvas isn't ready yet
+      const FIXED_WIDTH = 960;
+      const FIXED_HEIGHT = 540;
+      preCheckCanvas.width = processCanvas.value?.width || FIXED_WIDTH;
+      preCheckCanvas.height = processCanvas.value?.height || FIXED_HEIGHT;
+      
+      // Force a fresh frame capture to avoid cached detection
+      preCtx.clearRect(0, 0, preCheckCanvas.width, preCheckCanvas.height);
+
+      // Draw from video or processCanvas
+      if (videoElement.value) {
+        // Always draw from video for fresh frame
+        preCtx.drawImage(videoElement.value, 0, 0, preCheckCanvas.width, preCheckCanvas.height);
+      } else {
+        console.warn('[Scanner] No video element available for Vision AI capture');
+        return;
+      }
+
+      const preliminaryBounds = await detectCardBounds(preCheckCanvas);
+      
+      // Log card detection result
+      if (preliminaryBounds) {
+        console.log('[Scanner] Card detected with', (preliminaryBounds.confidence * 100).toFixed(0) + '% confidence, required:', INITIAL_MIN_CONFIDENCE);
+      } else {
+        console.log('[Scanner] No card detected by canvasCardDetector');
+      }
+
+      // Bounds validation - reject obvious false detections
+      if (preliminaryBounds && preliminaryBounds.width > MAX_CARD_WIDTH) {
+        // This is likely a false detection (too wide to be a card)
+        consecutiveGoodFrames = 0;
+        initialCardLocked = false;
+        lockedCardBounds = null;
+        scanStatus.value = `False detection - card too wide`;
+        return;
+      }
+      
+      // Two-tier confidence system
+      const requiredConfidence = initialCardLocked ? SUSTAINED_MIN_CONFIDENCE : INITIAL_MIN_CONFIDENCE;
+      
+      if (!preliminaryBounds || preliminaryBounds.confidence < requiredConfidence) {
+        // Reset tracking if we can't maintain minimum confidence
+        consecutiveGoodFrames = 0;
+        if (!initialCardLocked) {
+          scanStatus.value = `Detecting card... (${preliminaryBounds ? Math.round(preliminaryBounds.confidence * 100) : 0}% confidence, need ${Math.round(requiredConfidence * 100)}%)`;
+        } else {
+          // Lost lock on card
+          initialCardLocked = false;
+          lockedCardBounds = null;
+          scanStatus.value = `Lost card tracking - reacquiring...`;
+        }
+        return;
+      }
+      
+      // Check position stability if we have a locked card
+      if (lockedCardBounds) {
+        const xDrift = Math.abs(preliminaryBounds.x - lockedCardBounds.x);
+        const yDrift = Math.abs(preliminaryBounds.y - lockedCardBounds.y);
+        
+        if (xDrift > MAX_POSITION_DRIFT || yDrift > MAX_POSITION_DRIFT) {
+          // Card moved too much - probably a different detection
+          console.log('[Scanner] Card position drift too large - resetting');
+          consecutiveGoodFrames = 0;
+          initialCardLocked = false;
+          lockedCardBounds = null;
+          return;
+        }
+      }
+      
+      // First good detection - lock onto this card
+      if (!initialCardLocked && preliminaryBounds.confidence >= INITIAL_MIN_CONFIDENCE) {
+        initialCardLocked = true;
+        lockedCardBounds = {
+          x: preliminaryBounds.x,
+          y: preliminaryBounds.y,
+          width: preliminaryBounds.width,
+          height: preliminaryBounds.height
+        };
+        console.log('[Scanner] Locked onto card with', (preliminaryBounds.confidence * 100).toFixed(0) + '% confidence');
+      }
+      
+      // Update locked bounds with current position (moving average)
+      if (lockedCardBounds) {
+        lockedCardBounds.x = (lockedCardBounds.x * 0.7 + preliminaryBounds.x * 0.3);
+        lockedCardBounds.y = (lockedCardBounds.y * 0.7 + preliminaryBounds.y * 0.3);
+        lockedCardBounds.width = (lockedCardBounds.width * 0.7 + preliminaryBounds.width * 0.3);
+        lockedCardBounds.height = (lockedCardBounds.height * 0.7 + preliminaryBounds.height * 0.3);
+      }
+      
+      // Increment consecutive good frames
+      consecutiveGoodFrames++;
+      
+      // Check if we have enough consecutive good frames
+      if (consecutiveGoodFrames < REQUIRED_GOOD_FRAMES) {
+        console.log('[Scanner] Building confidence:', consecutiveGoodFrames, '/', REQUIRED_GOOD_FRAMES, 'frames');
+        scanStatus.value = `Card detected (${Math.round(preliminaryBounds.confidence * 100)}%) - stabilizing... ${consecutiveGoodFrames}/${REQUIRED_GOOD_FRAMES}`;
+        return; // Keep streaming, need more stable frames
+      }
+      
+      // Check if we're still in cooldown period
+      const timeSinceLastCall = Date.now() - lastVisionAICallTime;
+      if (timeSinceLastCall < VISION_AI_COOLDOWN) {
+        const remainingCooldown = Math.ceil((VISION_AI_COOLDOWN - timeSinceLastCall) / 1000);
+        if (consecutiveGoodFrames === REQUIRED_GOOD_FRAMES) { // Only log once when we first hit the required frames
+          console.log(`[Scanner] Vision AI cooldown active - waiting ${remainingCooldown}s before next scan`);
+        }
+        scanStatus.value = `Cooldown: ${remainingCooldown}s until next scan`;
+        consecutiveGoodFrames = 0; // Reset frame counter during cooldown
+        initialCardLocked = false; // Reset card lock during cooldown
+        lockedCardBounds = null;
+        canvasCardDetector.reset(); // Clear cached detection during cooldown
+        return;
+      }
+      
+      console.log('[Scanner] 🎯 Card confidence sufficient and stable after', REQUIRED_GOOD_FRAMES, 'frames - CALLING VISION AI NOW');
+      
+      // Record the time of this Vision AI call
+      lastVisionAICallTime = Date.now();
+      
+      // Reset counter and lock for next detection
+      consecutiveGoodFrames = 0;
+      initialCardLocked = false;
+      lockedCardBounds = null;
+      
+      // Reset the card detector to prevent detecting the same card position
+      canvasCardDetector.reset();
+      
+      lastVisionTriggerTime = now;
+      visionProcessing.value = true;
+      scanStatus.value = 'Vision AI processing...';
+      
+      // NOW stop streaming right before Vision AI call (not during cooldown)
+      stopStreamingPipeline();
+      
+      try {
+        // Use the already captured canvas with good confidence
+        const capturedCanvas = preCheckCanvas;
+        const cardBounds = preliminaryBounds;
+        
+        // We already know card is detected with good confidence
+        if (!cardBounds) {
+          // This shouldn't happen but handle it anyway
+          console.warn('[Scanner] Unexpected: no card boundaries');
+          visionProcessing.value = false;
+          scanStatus.value = 'Card detection failed';
+          // Resume scanning after a short delay
+          setTimeout(() => {
+            if (realTimeMode.value) {
+              showCanvas.value = false;
+              startStreamingPipeline();
+            }
+          }, 1000);
+          return;
+        }
+        
+        let croppedCanvas = capturedCanvas;
+        
+        if (cardBounds) {
+          console.log('[Scanner] Cropping to detected card bounds with buffer');
+          
+          // Add a small buffer (5% on each side) to ensure we get everything
+          const bufferPercent = 0.05;
+          const bufferX = Math.floor(cardBounds.width * bufferPercent);
+          const bufferY = Math.floor(cardBounds.height * bufferPercent);
+          
+          // Calculate buffered bounds (but stay within canvas limits)
+          const bufferedBounds = {
+            x: Math.max(0, cardBounds.x - bufferX),
+            y: Math.max(0, cardBounds.y - bufferY),
+            width: Math.min(capturedCanvas.width - (cardBounds.x - bufferX), cardBounds.width + (bufferX * 2)),
+            height: Math.min(capturedCanvas.height - (cardBounds.y - bufferY), cardBounds.height + (bufferY * 2))
+          };
+          
+          // Scale up the cropped region for better OCR (2x scaling)
+          const scaleFactor = 2;
+          croppedCanvas = document.createElement('canvas');
+          const cropCtx = croppedCanvas.getContext('2d')!;
+          
+          // Set canvas size to scaled dimensions
+          croppedCanvas.width = bufferedBounds.width * scaleFactor;
+          croppedCanvas.height = bufferedBounds.height * scaleFactor;
+          
+          // Enable image smoothing for better quality when scaling
+          cropCtx.imageSmoothingEnabled = true;
+          cropCtx.imageSmoothingQuality = 'high';
+          
+          // Draw the cropped and scaled region with buffer
+          cropCtx.drawImage(
+            capturedCanvas, 
+            bufferedBounds.x, bufferedBounds.y, bufferedBounds.width, bufferedBounds.height,
+            0, 0, croppedCanvas.width, croppedCanvas.height
+          );
+          
+          console.log('[Scanner] Scaled crop for Vision AI:', croppedCanvas.width, 'x', croppedCanvas.height);
+        }
+        
+        // Show the captured card in the UI - full size
+        if (canvasElement.value) {
+          const displayCtx = canvasElement.value.getContext('2d')!;
+          // Match video container size for full display
+          canvasElement.value.width = 960;
+          canvasElement.value.height = 540;
+          displayCtx.drawImage(capturedCanvas, 0, 0, 960, 540);
+          showCanvas.value = true; // Show the captured card full size
+        }
+        
+        // Add CROPPED image to debug view - this is what would be sent to Vision AI
+        const croppedDataUrl = croppedCanvas.toDataURL();
+        const fullDataUrl = capturedCanvas.toDataURL();
+        
+        // Force Vue reactivity by creating a new Map
+        const newDebugCanvases = new Map(debugCanvases.value);
+        newDebugCanvases.set('vision_ai_capture', croppedDataUrl);
+        newDebugCanvases.set('full_capture', fullDataUrl);
+        debugCanvases.value = newDebugCanvases;
+        
+        console.log('[Scanner] Calling Vision AI with cropped card image');
+        console.log('[Scanner] Full capture size:', capturedCanvas.width, 'x', capturedCanvas.height);
+        console.log('[Scanner] Cropped card size:', croppedCanvas.width, 'x', croppedCanvas.height);
+        console.log('[Scanner] Debug images added:', newDebugCanvases.size, 'images');
+        console.log('[Scanner] Vision capture data URL length:', croppedDataUrl.length);
+        
+        // Call Vision AI with cropped image
+        const visionService = getVisionService();
+        const visionResult = await visionService.extractCardInfo(croppedCanvas); // Send cropped image
+        
+        console.log('[Scanner] Vision AI full response:', visionResult);
+        console.log('[Scanner] Raw text detected:', visionResult.raw_text);
+        
+        if (visionResult.collector_number && visionResult.set_code) {
+          console.log('[Scanner] Vision AI successfully extracted:');
+          console.log('  - Set Code:', visionResult.set_code);
+          console.log('  - Collector Number:', visionResult.collector_number);
+          console.log('  - Confidence:', visionResult.confidence);
+          
+          // Add to scan queue directly
+          scanStatus.value = 'Adding to queue...';
+          const success = await addToScanQueue(visionResult.set_code, visionResult.collector_number, visionResult.confidence);
+          
+          if (success) {
+            scanStatus.value = `✓ Added ${visionResult.set_code} #${visionResult.collector_number} to queue`;
+            
+            // Show success checkmark
+            showSuccessCheckmark.value = true;
+            setTimeout(() => {
+              showSuccessCheckmark.value = false;
+            }, 2500);
+            
+            // Wait for user to remove card before resuming
+            setTimeout(async () => {
+              scanStatus.value = 'Ready for next card';
+              showCanvas.value = false; // Hide captured image, show video
+              
+              // Ensure video is playing before restarting pipeline
+              if (videoElement.value && videoElement.value.paused) {
+                try {
+                  await videoElement.value.play();
+                  console.log('[Scanner] Video playback resumed');
+                } catch (error) {
+                  console.error('[Scanner] Failed to resume video:', error);
+                }
+              }
+              
+              startStreamingPipeline(); // Resume scanning for next card
+            }, 2000);
+          }
+        } else {
+          console.log('[Scanner] Vision AI could not extract complete card info');
+          console.log('  - Set Code found:', visionResult.set_code || 'No');
+          console.log('  - Collector Number found:', visionResult.collector_number || 'No');
+          console.log('  - Error:', visionResult.error || 'None');
+          console.log('  - Raw text:', visionResult.raw_text?.substring(0, 200) || 'None');
+          
+          scanStatus.value = `Vision AI: ${visionResult.error || 'Could not detect both set code and collector number'}`;
+          
+          // Resume scanning after showing error
+          setTimeout(async () => {
+            if (realTimeMode.value) {
+              showCanvas.value = false; // Hide captured image, show video
+              
+              // Ensure video is playing before restarting pipeline
+              if (videoElement.value && videoElement.value.paused) {
+                try {
+                  await videoElement.value.play();
+                  console.log('[Scanner] Video playback resumed after error');
+                } catch (error) {
+                  console.error('[Scanner] Failed to resume video:', error);
+                }
+              }
+              
+              startStreamingPipeline();
+            }
+          }, 3000);
+        }
+      } catch (error) {
+        console.error('[Scanner] Vision AI error:', error);
+        scanStatus.value = 'Vision AI error - resuming OCR';
+        // Resume scanning on error
+        setTimeout(async () => {
+          if (realTimeMode.value) {
+            showCanvas.value = false; // Hide captured image, show video
+            
+            // Ensure video is playing before restarting pipeline
+            if (videoElement.value && videoElement.value.paused) {
+              try {
+                await videoElement.value.play();
+                console.log('[Scanner] Video playback resumed after exception');
+              } catch (error) {
+                console.error('[Scanner] Failed to resume video:', error);
+              }
+            }
+            
+            startStreamingPipeline();
+          }
+        }, 2000);
+      } finally {
+        visionProcessing.value = false;
+      }
+    }
+    
+    // Reset counter if card is lost or quality drops too much
+    if (!hasGoodCard && consecutiveGoodFrames > 0) {
+      console.log('[Scanner] Card quality dropped - resetting counter');
+      consecutiveGoodFrames = 0; // Reset the counter
+      scanStatus.value = 'Position card in view...';
+    }
+  }
+);
 
 /**
  * Start the streaming OCR pipeline
@@ -586,15 +1253,19 @@ function toggleRealTime() {
 async function startStreamingPipeline() {
   if (!videoElement.value || !processCanvas.value) return;
   
-  // Set up canvases
+  // Set up canvases with fixed dimensions for consistent ROI positioning
   const video = videoElement.value;
-  processCanvas.value.width = video.videoWidth || 640;
-  processCanvas.value.height = video.videoHeight || 480;
+  // Always use fixed dimensions regardless of actual video resolution
+  const FIXED_WIDTH = 960;
+  const FIXED_HEIGHT = 540;
+  
+  processCanvas.value.width = FIXED_WIDTH;
+  processCanvas.value.height = FIXED_HEIGHT;
   
   // Set up overlay canvas for alignment guide
   if (overlayCanvas.value) {
-    overlayCanvas.value.width = video.videoWidth || 640;
-    overlayCanvas.value.height = video.videoHeight || 480;
+    overlayCanvas.value.width = FIXED_WIDTH;
+    overlayCanvas.value.height = FIXED_HEIGHT;
     
     // Draw initial guide
     visualAlignmentGuide.setState('detecting');
@@ -678,49 +1349,139 @@ function handleCardIdentified(event: StreamingEvent) {
 async function handleCardCommitted(event: StreamingEvent) {
   const { card } = event.data;
   
-  // Lookup the card in Scryfall
+  // Lookup the card in Scryfall (use getCard method that exists)
   try {
-    const scryfallCard = await scryfallAPI.getCardBySetAndNumber(card.setCode, card.collectorNumber);
+    const scryfallCard = await scryfallAPI.getCard(card.setCode, card.collectorNumber);
     
     if (scryfallCard) {
+      const dbCard = scryfallAPI.convertToDbCard(scryfallCard);
+      
       // Add to scanned cards queue
       scannedCards.value.push({
-        card: scryfallCard,
+        card: dbCard,
         confidence: card.confidence * 100,
         isFoil: false,
         quantity: 1,
         detectedAt: new Date()
       });
       
-      // Visual feedback
+      // Visual feedback - show success state
       visualAlignmentGuide.setState('success');
-      scanStatus.value = `Scanned: ${scryfallCard.name}`;
+      scanStatus.value = `✓ Scanned: ${dbCard.name}`;
+      console.log('[Streaming] Card successfully scanned:', dbCard.name);
       
-      // Prevent duplicate scanning
+      // Pause scanning for 3 seconds to allow user to change card
+      // This gives visual feedback and prevents re-scanning the same card
+      streamingOCRService.updateConfig({ enableAutoCommit: false });
+      
+      // After 3 seconds, reset and resume scanning
+      setTimeout(() => {
+        // Reset the temporal fusion to clear voting history
+        temporalOCRFusion.reset();
+        
+        // Change visual state back to detecting
+        visualAlignmentGuide.setState('detecting');
+        scanStatus.value = 'Ready for next card';
+        
+        // Re-enable auto-commit
+        streamingOCRService.updateConfig({ enableAutoCommit: true });
+      }, 3000);
+      
+      // Prevent duplicate scanning for 5 seconds
       const cardKey = `${card.setCode}/${card.collectorNumber}`;
       recentlyScanned.add(cardKey);
       setTimeout(() => recentlyScanned.delete(cardKey), 5000);
+    } else {
+      console.warn('[Streaming] Card not found in Scryfall:', `${card.setCode}/${card.collectorNumber}`);
+      scanStatus.value = `Card not found: ${card.setCode}/${card.collectorNumber}`;
+      visualAlignmentGuide.setState('error');
+      
+      // Reset after 2 seconds
+      setTimeout(() => {
+        visualAlignmentGuide.setState('detecting');
+        scanStatus.value = 'Scanning...';
+      }, 2000);
     }
   } catch (error) {
     console.error('[Streaming] Failed to lookup card:', error);
     scanStatus.value = 'Card lookup failed';
+    visualAlignmentGuide.setState('error');
+    
+    // Reset after 2 seconds
+    setTimeout(() => {
+      visualAlignmentGuide.setState('detecting');
+      scanStatus.value = 'Scanning...';
+    }, 2000);
   }
 }
 
 /**
  * Update streaming status periodically
  */
+var statusUpdateCounter = 0; // Use var so it's accessible in watch
 function updateStreamingStatus() {
-  if (!realTimeMode.value) return;
+  if (!realTimeMode.value) {
+    console.log('[Scanner] updateStreamingStatus stopped - realTimeMode is false');
+    return;
+  }
   
   streamingStatus.value = streamingOCRService.getStatus();
+  
+  // Remove status update logging - it's too frequent
+  statusUpdateCounter++;
   
   // Update confidence display
   if (streamingStatus.value.pendingIdentification) {
     currentConfidence.value = streamingStatus.value.pendingIdentification.confidence * 100;
   }
   
+  // Update debug canvases periodically from streamingROIManager
+  updateDebugCanvases();
+  
   requestAnimationFrame(updateStreamingStatus);
+}
+
+/**
+ * Update debug canvases from streamingROIManager
+ */
+function updateDebugCanvases() {
+  if (!debugMode.value || !realTimeMode.value) return;
+  
+  // Get debug canvases from streamingROIManager
+  const roiCanvases = streamingROIManager.getDebugCanvases();
+  
+  // Preserve Vision AI capture images if they exist
+  const currentDebugCanvases = new Map(debugCanvases.value);
+  const visionCapture = currentDebugCanvases.get('vision_ai_capture');
+  const fullCapture = currentDebugCanvases.get('full_capture');
+  
+  // Convert canvas elements to data URLs
+  const newDebugCanvases = new Map();
+  for (const [name, canvas] of roiCanvases) {
+    if (canvas && canvas.width > 0 && canvas.height > 0) {
+      try {
+        const dataUrl = canvas.toDataURL();
+        if (dataUrl && dataUrl.length > 100) { // Valid data URL
+          newDebugCanvases.set(name, dataUrl);
+        }
+      } catch (e) {
+        // Skip invalid canvases
+      }
+    }
+  }
+  
+  // Restore Vision AI captures if they exist
+  if (visionCapture) {
+    newDebugCanvases.set('vision_ai_capture', visionCapture);
+  }
+  if (fullCapture) {
+    newDebugCanvases.set('full_capture', fullCapture);
+  }
+  
+  // Only update if we have valid canvases
+  if (newDebugCanvases.size > 0) {
+    debugCanvases.value = newDebugCanvases;
+  }
 }
 
 /**
@@ -732,9 +1493,11 @@ function startSmartMonitoring() {
   const video = videoElement.value;
   const overlay = overlayCanvas.value;
   
-  // Set overlay canvas size to match video
-  overlay.width = video.videoWidth || 640;
-  overlay.height = video.videoHeight || 480;
+  // Use fixed dimensions for consistent guide positioning
+  const FIXED_WIDTH = 960;
+  const FIXED_HEIGHT = 540;
+  overlay.width = FIXED_WIDTH;
+  overlay.height = FIXED_HEIGHT;
   
   // Monitoring loop
   function monitor() {
@@ -1082,8 +1845,25 @@ async function addAllToCollection() {
     for (const item of scannedCards.value) {
       // Add each card with its quantity and foil status
       for (let i = 0; i < item.quantity; i++) {
-        const cardToSave = { ...item.card, isFoil: item.isFoil };
-        await (window as any).electronAPI.saveCard(cardToSave);
+        // Create a clean serializable object for IPC
+        const cardToSave = {
+          ...item.card,
+          isFoil: item.isFoil,
+          // Convert Date to ISO string for serialization
+          scannedAt: item.detectedAt ? item.detectedAt.toISOString() : new Date().toISOString()
+        };
+        
+        // Clean up the object for IPC serialization
+        const cleanCard = JSON.parse(JSON.stringify(cardToSave, (key, value) => {
+          // Remove undefined values
+          if (value === undefined) return null;
+          // Remove functions
+          if (typeof value === 'function') return null;
+          // Keep everything else
+          return value;
+        }));
+        
+        await (window as any).electronAPI.saveCard(cleanCard);
       }
     }
     
@@ -1139,6 +1919,12 @@ async function addToCollection(card: any) {
 }
 
 async function toggleCamera() {
+  // Check for API key first
+  if (!visionApiKey.value) {
+    alert('Please configure your Google Vision API key in Settings first');
+    return;
+  }
+  
   if (cameraActive.value) {
     stopCamera();
   } else {
@@ -1158,6 +1944,8 @@ async function toggleCamera() {
       }
     }
     await initCamera();
+    // Always start streaming mode immediately
+    startStreamingPipeline();
   }
 }
 
@@ -1168,8 +1956,41 @@ watch(settings, () => {
 
 onMounted(async () => {
   await getCameras();
+  
+  // Canvas card detector doesn't need initialization
+  console.log('[Scanner] Canvas card detector ready');
+  console.log('[Scanner] Initial vision enabled status:', visionEnabled.value);
+  
   await setupOCR();
-  // Don't auto-start camera
+  
+  // Load Vision API key from settings
+  const settings = localStorage.getItem('cardscanner-settings');
+  if (settings) {
+    const parsed = JSON.parse(settings);
+    if (parsed.visionApiKey) {
+      visionApiKey.value = parsed.visionApiKey;
+      const isValid = await testVisionConnection(parsed.visionApiKey);
+      visionEnabled.value = isValid;
+    }
+  }
+  
+  // Watch for settings changes
+  setInterval(() => {
+    const currentSettings = localStorage.getItem('cardscanner-settings');
+    if (currentSettings) {
+      const parsed = JSON.parse(currentSettings);
+      if (parsed.visionApiKey !== visionApiKey.value) {
+        visionApiKey.value = parsed.visionApiKey || '';
+        if (parsed.visionApiKey) {
+          testVisionConnection(parsed.visionApiKey).then(isValid => {
+            visionEnabled.value = isValid;
+          });
+        } else {
+          visionEnabled.value = false;
+        }
+      }
+    }
+  }, 1000);
 });
 
 onUnmounted(async () => {
@@ -1198,6 +2019,156 @@ onUnmounted(async () => {
   margin-top: 10px;
 }
 
+.vision-ai-config {
+  margin-top: 15px;
+  padding: 15px;
+  background: #f5f5f5;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+}
+
+.config-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.vision-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.vision-toggle input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+}
+
+.api-key-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.api-key-field {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 13px;
+}
+
+.status-ok {
+  color: #4CAF50;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+.status-error {
+  color: #f44336;
+  font-weight: bold;
+  font-size: 14px;
+}
+
+/* Compact stability indicator in header */
+.stability-indicator-compact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 15px;
+  padding: 8px 15px;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 25px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.stability-bar-compact {
+  width: 100px;
+  height: 8px;
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.stability-text {
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 90px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.scan-status-text {
+  margin-left: auto;
+  font-size: 14px;
+  color: #666;
+  padding: 8px 15px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 20px;
+}
+
+/* API key warning */
+.api-key-warning {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 4px;
+  padding: 10px 15px;
+  margin-top: 10px;
+  color: #856404;
+  font-size: 14px;
+}
+
+.api-key-warning a {
+  color: #0066cc;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.api-key-warning a:hover {
+  text-decoration: underline;
+}
+
+/* Success checkmark overlay */
+.success-checkmark {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.85);
+  border-radius: 20px;
+  padding: 30px;
+  z-index: 100;
+  text-align: center;
+  animation: fadeInScale 0.3s ease-out;
+}
+
+.checkmark-circle {
+  margin-bottom: 15px;
+}
+
+.success-checkmark p {
+  color: white;
+  font-size: 16px;
+  margin: 0;
+  font-weight: 500;
+}
+
+@keyframes fadeInScale {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.8);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
 .scanner-content {
   display: grid;
   grid-template-columns: 2fr 1fr;
@@ -1209,13 +2180,19 @@ onUnmounted(async () => {
   background: #000;
   border-radius: 8px;
   overflow: hidden;
+  /* Fixed size container for consistent ROI positioning */
+  width: 960px;  /* Fixed width - half of 1920 for reasonable display size */
+  height: 540px; /* Fixed height - maintains 16:9 aspect ratio */
+  margin: 0 auto; /* Center the container */
 }
 
 .video-container video,
 .video-container canvas {
-  width: 100%;
-  height: auto;
+  /* Fixed size to ensure consistent ROI extraction */
+  width: 960px;
+  height: 540px;
   display: block;
+  object-fit: cover; /* Ensures video fills container without distortion */
 }
 
 .overlay-canvas {
@@ -1228,18 +2205,7 @@ onUnmounted(async () => {
   z-index: 10;
 }
 
-.capture-overlay {
-  position: absolute;
-  bottom: 20px;
-  left: 20px;
-  right: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 15px;
-  border-radius: 8px;
-}
+/* Removed controls-below-video - now using header controls */
 
 .scan-status {
   display: flex;
@@ -1648,5 +2614,76 @@ onUnmounted(async () => {
 
 .clear-btn:hover {
   background: #f57c00;
+}
+
+/* Debug Panel Styles */
+.debug-panel {
+  margin-top: 20px;
+  background: rgba(0, 0, 0, 0.9);
+  border: 1px solid #4CAF50;
+  border-radius: 8px;
+  padding: 10px;
+  width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.debug-panel h4 {
+  color: white;
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  text-align: center;
+}
+
+.debug-images {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.debug-image {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 5px;
+}
+
+.debug-image .no-image {
+  width: 100px;
+  height: 60px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px dashed #666;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #888;
+  font-size: 12px;
+}
+
+.debug-image label {
+  color: white;
+  font-size: 11px;
+  margin-bottom: 5px;
+  text-transform: uppercase;
+}
+
+.debug-image img {
+  border: 1px solid #4CAF50;
+  border-radius: 2px;
+  max-width: 200px;
+  height: auto;
+  image-rendering: pixelated; /* Keep pixels sharp for OCR debug */
+}
+
+.debug-text {
+  color: #4CAF50;
+  font-size: 12px;
+  font-family: monospace;
+  margin-top: 5px;
+  min-height: 16px;
+  text-align: center;
 }
 </style>

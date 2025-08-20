@@ -9,23 +9,27 @@
       <div class="settings-section">
         <h3>Scanner Settings</h3>
         <div class="setting-item">
+          <label>Google Vision API Key</label>
+          <div class="api-key-container">
+            <input 
+              :type="showApiKey ? 'text' : 'password'"
+              v-model="settings.visionApiKey" 
+              placeholder="Enter your Google Vision API key"
+              class="api-key-input"
+            />
+            <button @click="showApiKey = !showApiKey" class="toggle-visibility">
+              {{ showApiKey ? '🙈' : '👁️' }}
+            </button>
+          </div>
+        </div>
+        
+        <div class="setting-item">
           <label>Default Camera</label>
           <select v-model="settings.defaultCamera">
             <option value="">Auto-select</option>
             <option v-for="camera in cameras" :key="camera.deviceId" :value="camera.deviceId">
               {{ camera.label || `Camera ${cameras.indexOf(camera) + 1}` }}
             </option>
-          </select>
-        </div>
-        
-        <div class="setting-item">
-          <label>OCR Language</label>
-          <select v-model="settings.ocrLanguage">
-            <option value="eng">English</option>
-            <option value="jpn">Japanese</option>
-            <option value="deu">German</option>
-            <option value="fra">French</option>
-            <option value="spa">Spanish</option>
           </select>
         </div>
         
@@ -108,13 +112,15 @@
 import { ref, onMounted } from 'vue';
 
 const settings = ref({
+  visionApiKey: '',
   defaultCamera: '',
-  ocrLanguage: 'eng',
   autoFetch: true,
   defaultView: 'grid',
   cardsPerPage: 50,
   currency: 'usd',
 });
+
+const showApiKey = ref(false);
 
 const cameras = ref<MediaDeviceInfo[]>([]);
 const dbPath = ref('');
@@ -152,8 +158,8 @@ async function saveSettings() {
 function resetSettings() {
   if (confirm('Reset all settings to defaults?')) {
     settings.value = {
+      visionApiKey: '',
       defaultCamera: '',
-      ocrLanguage: 'eng',
       autoFetch: true,
       defaultView: 'grid',
       cardsPerPage: 50,
@@ -291,6 +297,36 @@ function calculateCacheSize() {
   width: 20px;
   height: 20px;
   cursor: pointer;
+}
+
+.api-key-container {
+  display: flex;
+  gap: 0.5rem;
+  flex: 1;
+  max-width: 400px;
+}
+
+.api-key-input {
+  flex: 1;
+  padding: 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: monospace;
+}
+
+.toggle-visibility {
+  padding: 0.5rem 1rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.toggle-visibility:hover {
+  background: var(--bg-secondary);
 }
 
 .button-group {

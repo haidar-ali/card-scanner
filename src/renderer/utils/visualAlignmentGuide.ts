@@ -32,22 +32,22 @@ export type ScanState = 'idle' | 'detecting' | 'ready' | 'processing' | 'success
 
 export class VisualAlignmentGuide {
   private currentState: ScanState = 'idle';
-  private message: string = 'Position card bottom in the frame';
+  private message: string = 'Position entire card within the frame';
   private metrics: any = null;
   private animationFrame = 0;
   
   private defaultConfig: GuideConfig = {
     targetRegion: {
-      x: 0.05,      // 5% from left
-      y: 0.75,      // 75% from top - bottom portion of screen
-      width: 0.9,   // 90% of width - wide scan area
-      height: 0.2   // 20% of height - bottom edge area
+      x: 0.25,      // 25% from left - center the card
+      y: 0.15,      // 15% from top - show full card height
+      width: 0.50,  // 50% of width - full card width
+      height: 0.70  // 70% of height - full card height (typical Magic card aspect ratio)
     },
-    processRegion: {  // Where we're actually looking for text
-      x: 0.05,      // 5% from left
-      y: 0.85,      // 85% from top - very bottom where text appears
-      width: 0.9,   // 90% width - full scan width
-      height: 0.08  // 8% height - text line area
+    processRegion: {  // Optional inner region - can be smaller for focus area
+      x: 0.30,      // 30% from left - inner card area
+      y: 0.20,      // 20% from top - inner card area  
+      width: 0.40,  // 40% width - inner card area
+      height: 0.60  // 60% height - inner card area
     },
     colors: {
       idle: 'rgba(255, 255, 255, 0.3)',
@@ -440,7 +440,7 @@ export class VisualAlignmentGuide {
   private getInstruction(): string {
     switch (this.currentState) {
       case 'idle':
-        return 'Position ONLY the bottom edge with collector number';
+        return 'Position collector number (like "204/205") in the LEFT box';
       case 'detecting':
         return 'Aligning... Keep card steady';
       case 'ready':

@@ -194,8 +194,8 @@ export class StreamingOCRService {
         this.status.isStable = metrics.isStable;
         this.status.stabilityScore = metrics.stabilityScore;
         
-        // Debug logging every 150 frames (5 seconds) - reduced frequency
-        if (this.frameCounters.fast % 150 === 0 && this.config.debugMode) {
+        // Debug logging every 300 frames (10 seconds) - reduced frequency
+        if (this.frameCounters.fast % 300 === 0 && this.config.debugMode) {
           console.log(`[FastLoop] Heartbeat - stable: ${metrics.isStable}, score: ${metrics.stabilityScore.toFixed(2)}`);
         }
         
@@ -248,7 +248,7 @@ export class StreamingOCRService {
         }
         
         // Only log processing occasionally to reduce noise
-        if (this.frameCounters.medium % 20 === 0) {
+        if (this.frameCounters.medium % 40 === 0) {
           console.log('[MediumLoop] Processing ROIs...');
         }
         
@@ -268,16 +268,8 @@ export class StreamingOCRService {
           );
         }
         
-        // Symbol classification (if enabled)
-        if (this.config.enableSymbolClassification && this.frameCounters.medium % 3 === 0) {
-          const symbolROI = streamingROIManager.extractSymbolROI(rectifiedCanvas);
-          const symbolResults = await setSymbolClassifier.classifySymbol(symbolROI);
-          
-          if (symbolResults.length > 0) {
-            this.symbolCandidates = symbolResults;
-            // Symbol classification is disabled, so this shouldn't log
-          }
-        }
+        // Symbol classification disabled - using Vision AI instead
+        // We don't need symbol classification since Vision AI handles everything
         
         // Update current hypotheses for UI
         const stats = temporalOCRFusion.getVotingStats();

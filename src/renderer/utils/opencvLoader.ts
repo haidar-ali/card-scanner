@@ -1,6 +1,6 @@
 /**
- * OpenCV.js Loader for Web Environment
- * Handles loading and initializing OpenCV.js in the browser
+ * OpenCV.js Loader
+ * Loads OpenCV.js library dynamically
  */
 
 declare global {
@@ -9,85 +9,64 @@ declare global {
   }
 }
 
-let isOpenCVLoaded = false;
-let loadPromise: Promise<any> | null = null;
+let cvPromise: Promise<any> | null = null;
 
-export function loadOpenCV(): Promise<any> {
-  // Return existing promise if already loading
-  if (loadPromise) {
-    return loadPromise;
-  }
-
-  // Return immediately if already loaded
-  if (isOpenCVLoaded && window.cv) {
-    return Promise.resolve(window.cv);
-  }
-
-  loadPromise = new Promise((resolve, reject) => {
-    // Set a timeout to prevent hanging
-    const timeoutId = setTimeout(() => {
-      console.warn('[OpenCV] Loading timeout, proceeding without OpenCV');
-      reject(new Error('OpenCV loading timeout'));
-    }, 10000); // 10 second timeout
-
-    try {
-      // Create script element to load OpenCV.js
-      const script = document.createElement('script');
-      script.src = 'https://docs.opencv.org/4.8.0/opencv.js';
-      script.async = true;
-
-      script.onload = () => {
-        console.log('[OpenCV] Script loaded, waiting for initialization...');
-        
-        // OpenCV.js needs time to initialize
-        let attempts = 0;
-        const maxAttempts = 50; // Max 5 seconds
-        
-        const checkOpenCV = () => {
-          attempts++;
-          if (window.cv && window.cv.Mat) {
-            clearTimeout(timeoutId);
-            console.log('[OpenCV] Initialized successfully');
-            isOpenCVLoaded = true;
-            resolve(window.cv);
-          } else if (attempts >= maxAttempts) {
-            clearTimeout(timeoutId);
-            console.warn('[OpenCV] Initialization timeout');
-            reject(new Error('OpenCV initialization timeout'));
-          } else {
-            setTimeout(checkOpenCV, 100);
-          }
-        };
-
-        checkOpenCV();
-      };
-
-      script.onerror = (error) => {
-        clearTimeout(timeoutId);
-        console.error('[OpenCV] Failed to load script:', error);
-        reject(new Error('Failed to load OpenCV.js'));
-      };
-
-      // Add to document
-      document.head.appendChild(script);
-
-    } catch (error) {
-      clearTimeout(timeoutId);
-      console.error('[OpenCV] Load error:', error);
-      reject(error);
+export async function loadOpenCV(): Promise<any> {
+  if (cvPromise) return cvPromise;
+  
+  cvPromise = new Promise((resolve, reject) => {
+    // Check if already loaded
+    if (window.cv && window.cv.Mat) {
+      console.log('[OpenCV Loader] Already loaded');
+      resolve(window.cv);
+      return;
     }
+    
+    // Create script element
+    const script = document.createElement('script');
+    script.async = true;
+    
+    // Use CDN fallback since we can't use require in renderer
+    // We'll use the OpenCV.js CDN
+    script.src = 'https://docs.opencv.org/4.5.5/opencv.js';
+    
+    // Set up handlers
+    script.onload = () => {
+      console.log('[OpenCV Loader] Script loaded, waiting for initialization...');
+      
+      // OpenCV.js uses Module pattern
+      if (typeof window.cv !== 'undefined') {
+        // Set up runtime initialized callback
+        window.cv.onRuntimeInitialized = () => {
+          console.log('[OpenCV Loader] OpenCV.js runtime initialized');
+          resolve(window.cv);
+        };
+      } else {
+        // Wait for cv to be ready
+        const checkReady = setInterval(() => {
+          if (window.cv && window.cv.Mat) {
+            clearInterval(checkReady);
+            console.log('[OpenCV Loader] OpenCV.js ready');
+            resolve(window.cv);
+          }
+        }, 100);
+        
+        // Timeout after 10 seconds
+        setTimeout(() => {
+          clearInterval(checkReady);
+          reject(new Error('OpenCV initialization timeout'));
+        }, 10000);
+      }
+    };
+    
+    script.onerror = (error) => {
+      console.error('[OpenCV Loader] Failed to load script:', error);
+      reject(new Error('Failed to load OpenCV.js'));
+    };
+    
+    // Add to document
+    document.head.appendChild(script);
   });
-
-  return loadPromise;
-}
-
-export function isOpenCVReady(): boolean {
-  return isOpenCVLoaded && window.cv && window.cv.Mat;
-}
-
-export function getOpenCV(): any {
-  if (!isOpenCVReady()) {
-    throw new Error('OpenCV.js not loaded. Call loadOpenCV() first.');
-  }
-  return window.cv;
+  
+  return cvPromise;
 }

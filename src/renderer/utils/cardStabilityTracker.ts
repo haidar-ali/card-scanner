@@ -28,6 +28,7 @@ export class CardStabilityTracker {
   private loggedDrawInfo = false;
   private loggedRectified = false;
   private loggedVideoState = false;
+  private frameCounter = 0;
   
   // Thresholds
   private readonly MOTION_THRESHOLD = 5; // pixels
@@ -41,17 +42,35 @@ export class CardStabilityTracker {
    * Process a frame and determine card stability
    */
   analyzeFrame(canvas: HTMLCanvasElement): StabilityMetrics {
+    this.frameCounter++;
     const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     
     // Step 1: Detect card presence and corners
     const cardDetection = this.detectCard(imageData);
     
-    if (!cardDetection.found) {
-      // For now, always assume card is present to test the pipeline
-      // In production, implement proper card detection
-      cardDetection.found = true;
-      cardDetection.corners = this.getDefaultCorners(canvas.width, canvas.height);
+    // Check if we actually have a card based on edge density
+    const hasRealCard = this.hasSignificantContent(imageData);
+    
+    if (!cardDetection.found || !hasRealCard) {
+      // No card detected - reset stability
+      this.stabilityHistory = [];
+      
+      // Log why card wasn't detected (only occasionally to avoid spam)
+      if (this.frameCounter % 150 === 0) {
+        console.log('[Stability] No card detected - found:', cardDetection.found, 'hasContent:', hasRealCard);
+      }
+      
+      return {
+        isStable: false,
+        stabilityScore: 0,
+        sharpnessScore: 0,
+        motionDelta: 0,
+        rotationDelta: 0,
+        consecutiveStableFrames: 0,
+        cardPresent: false,
+        readyToRead: false
+      };
     }
     
     // Step 2: Calculate sharpness
@@ -103,7 +122,7 @@ export class CardStabilityTracker {
     
     this.lastPose = currentPose;
     
-    return {
+    const metrics = {
       isStable,
       stabilityScore,
       sharpnessScore: sharpness,
@@ -113,6 +132,13 @@ export class CardStabilityTracker {
       cardPresent: true,
       readyToRead: isStable && sharpness > this.SHARPNESS_THRESHOLD
     };
+    
+    // Commented out for cleaner logs - too frequent
+    // if (this.frameCounter % 30 === 0) {
+    //   console.log('[Stability] Metrics - stable:', isStable, 'score:', stabilityScore.toFixed(2), 'sharp:', sharpness.toFixed(0), 'ready:', metrics.readyToRead);
+    // }
+    
+    return metrics;
   }
   
   /**
@@ -149,9 +175,10 @@ export class CardStabilityTracker {
     const rectifiedCanvas = document.createElement('canvas');
     const ctx = rectifiedCanvas.getContext('2d', { willReadFrequently: true })!;
     
-    // Use video dimensions to avoid scaling issues
-    rectifiedCanvas.width = video.videoWidth;
-    rectifiedCanvas.height = video.videoHeight;
+    // Use fixed dimensions for consistent ROI positioning
+    // This ensures ROIs work regardless of actual video resolution
+    rectifiedCanvas.width = 960;  // Fixed width
+    rectifiedCanvas.height = 540; // Fixed height (16:9 aspect)
     
     // Apply inverse homography to get top-down view
     this.applyPerspectiveTransform(video, rectifiedCanvas, this.lastPose.homography);
@@ -176,22 +203,46 @@ export class CardStabilityTracker {
   // Private helper methods
   
   private detectCard(imageData: ImageData): { found: boolean; corners: { x: number; y: number }[] } {
-    // Simplified card detection using edge density and largest quadrilateral
+    // Detect card using edge density analysis
     const edges = this.detectEdges(imageData);
-    const contours = this.findContours(edges);
+    const { width, height } = imageData;
     
-    if (contours.length === 0) {
+    // Calculate edge density in center region
+    const centerX = Math.floor(width / 2);
+    const centerY = Math.floor(height / 2);
+    const sampleRadius = Math.min(width, height) * 0.3;
+    
+    let edgeCount = 0;
+    let totalSampled = 0;
+    
+    for (let y = centerY - sampleRadius; y < centerY + sampleRadius; y += 5) {
+      for (let x = centerX - sampleRadius; x < centerX + sampleRadius; x += 5) {
+        if (x >= 0 && x < width && y >= 0 && y < height) {
+          const idx = y * width + x;
+          if (edges[idx] > 100) { // Edge threshold
+            edgeCount++;
+          }
+          totalSampled++;
+        }
+      }
+    }
+    
+    // Need sufficient edge density to indicate a card is present
+    const edgeDensity = totalSampled > 0 ? edgeCount / totalSampled : 0;
+    const hasCard = edgeDensity > 0.05; // 5% edge density minimum
+    
+    // Commented out for cleaner logs - too frequent
+    // if (this.frameCounter % 30 === 0) {
+    //   console.log('[Stability] Card detection - edge density:', edgeDensity.toFixed(3), 'hasCard:', hasCard, 'edges:', edgeCount, '/', totalSampled);
+    // }
+    
+    if (!hasCard) {
       return { found: false, corners: [] };
     }
     
-    // Find largest quadrilateral
-    const quad = this.findLargestQuadrilateral(contours, imageData.width, imageData.height);
-    
-    if (!quad) {
-      return { found: false, corners: [] };
-    }
-    
-    return { found: true, corners: quad };
+    // If card detected, return estimated corners
+    const corners = this.getDefaultCorners(width, height);
+    return { found: true, corners };
   }
   
   private detectEdges(imageData: ImageData): Uint8ClampedArray {
@@ -225,25 +276,6 @@ export class CardStabilityTracker {
     return edges;
   }
   
-  private findContours(edges: Uint8ClampedArray): Array<{ x: number; y: number }[]> {
-    // Simplified contour detection - find connected edge components
-    // This is a placeholder - in production, you'd use a proper contour detection algorithm
-    const contours: Array<{ x: number; y: number }[]> = [];
-    
-    // For now, return a dummy contour representing typical card corners
-    // In real implementation, this would detect actual edges
-    return contours;
-  }
-  
-  private findLargestQuadrilateral(
-    contours: Array<{ x: number; y: number }[]>,
-    width: number,
-    height: number
-  ): { x: number; y: number }[] | null {
-    // For now, return approximate card corners based on typical card position
-    // In production, this would use proper quadrilateral detection
-    return this.getDefaultCorners(width, height);
-  }
   
   private getDefaultCorners(width: number, height: number): { x: number; y: number }[] {
     // Assume card is roughly centered and takes up 60-80% of frame
@@ -258,6 +290,54 @@ export class CardStabilityTracker {
       { x: left + cardWidth, y: top + cardHeight }, // Bottom-right
       { x: left, y: top + cardHeight }               // Bottom-left
     ];
+  }
+  
+  private hasSignificantContent(imageData: ImageData): boolean {
+    // Check if there's actually content in the frame (not just empty background)
+    const { data, width, height } = imageData;
+    
+    // Sample center region for content
+    const centerX = Math.floor(width / 2);
+    const centerY = Math.floor(height / 2);
+    const sampleSize = 100;
+    
+    let edgePixels = 0;
+    let totalSamples = 0;
+    
+    // Sample a grid in the center
+    for (let y = centerY - sampleSize; y < centerY + sampleSize; y += 10) {
+      for (let x = centerX - sampleSize; x < centerX + sampleSize; x += 10) {
+        if (x < 0 || x >= width || y < 0 || y >= height) continue;
+        
+        const idx = (y * width + x) * 4;
+        const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+        
+        // Check neighboring pixels for edges
+        if (x > 0 && x < width - 1) {
+          const leftIdx = (y * width + (x - 1)) * 4;
+          const rightIdx = (y * width + (x + 1)) * 4;
+          const leftGray = (data[leftIdx] + data[leftIdx + 1] + data[leftIdx + 2]) / 3;
+          const rightGray = (data[rightIdx] + data[rightIdx + 1] + data[rightIdx + 2]) / 3;
+          
+          if (Math.abs(gray - leftGray) > 20 || Math.abs(gray - rightGray) > 20) {
+            edgePixels++;
+          }
+        }
+        
+        totalSamples++;
+      }
+    }
+    
+    // Need at least 5% edge pixels to consider it has content (lowered threshold)
+    const edgeRatio = edgePixels / totalSamples;
+    const hasContent = edgeRatio > 0.05;
+    
+    // Commented out for cleaner logs - too frequent
+    // if (!hasContent) {
+    //   console.log('[Stability] No significant content detected - edge ratio:', edgeRatio.toFixed(3));
+    // }
+    
+    return hasContent;
   }
   
   private calculateSharpness(imageData: ImageData, corners: { x: number; y: number }[]): number {
