@@ -169,7 +169,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, inject } from 'vue';
 
 const cards = ref<any[]>([]);
 const loading = ref(true);
@@ -263,6 +263,12 @@ async function updateCard() {
     if (index >= 0) {
       cards.value[index] = { ...selectedCard.value };
     }
+    
+    // Refresh collection stats
+    const refreshStats = inject('refreshStats') as (() => Promise<void>) | undefined;
+    if (refreshStats) {
+      await refreshStats();
+    }
   } catch (error) {
     console.error('Failed to update card:', error);
   }
@@ -275,6 +281,12 @@ async function removeCard() {
     await (window as any).electronAPI.deleteCard(selectedCard.value.id);
     cards.value = cards.value.filter(c => c.id !== selectedCard.value.id);
     selectedCard.value = null;
+    
+    // Refresh collection stats
+    const refreshStats = inject('refreshStats') as (() => Promise<void>) | undefined;
+    if (refreshStats) {
+      await refreshStats();
+    }
   } catch (error) {
     console.error('Failed to remove card:', error);
   }

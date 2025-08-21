@@ -23,6 +23,9 @@ const electronAPI = {
   // Scryfall API
   fetchCardData: (setCode: string, number: string) => 
     ipcRenderer.invoke('fetch-card-data', setCode, number),
+  
+  // Collection Stats
+  getCollectionStats: () => ipcRenderer.invoke('get-collection-stats'),
 };
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);

@@ -7,6 +7,7 @@ export interface ElectronAPI {
   deleteCard: (id: string) => Promise<boolean>;
   updateCard: (id: string, updates: any) => Promise<boolean>;
   fetchCardData: (setCode: string, number: string) => Promise<any>;
+  getCollectionStats: () => Promise<{ totalCards: number; totalValue: number }>;
 }
 
 declare global {

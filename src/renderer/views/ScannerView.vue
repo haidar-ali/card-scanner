@@ -55,9 +55,18 @@
           </div>
         </div>
         
-        <!-- Debug ROI Panel - Under video -->
+        <!-- Manual Input - Under video -->
+        <div class="manual-input-compact">
+          <input v-model="manualSetCode" placeholder="Set Code" />
+          <input v-model="manualCardNumber" placeholder="Card #" />
+          <button @click="manualSearch" :disabled="!manualSetCode || !manualCardNumber">
+            Search
+          </button>
+        </div>
+        
+        <!-- Debug ROI Panel - Under manual input -->
         <div v-if="debugMode" class="debug-panel">
-          <h4>ROI Debug View</h4>
+          <h4>ROI Debug</h4>
           <div class="debug-images">
             <div v-for="[field, dataUrl] in debugCanvases" :key="field" class="debug-image">
               <label>{{ field }}</label>
@@ -72,32 +81,41 @@
       <!-- Scanned Cards Queue - On the right -->
       <div class="scan-queue" v-if="scannedCards.length > 0">
         <div class="queue-header">
-          <h3>Scanned Cards ({{ scannedCards.length }})</h3>
-          <button @click="addAllToCollection" class="bulk-add-btn" :disabled="scannedCards.length === 0">
-            Add All to Collection
+          <h3>Scanned ({{ scannedCards.length }})</h3>
+          <button @click="addAllToCollection" class="add-all-btn">
+            Add All
           </button>
         </div>
         <div class="queue-list">
-          <div v-for="(item, index) in scannedCards" :key="index" class="queue-item">
+          <div v-for="(item, index) in [...scannedCards].reverse()" :key="scannedCards.length - 1 - index" class="queue-card">
+            <img 
+              :src="item.card.imageUriSmall" 
+              :alt="item.card.name"
+              class="card-thumbnail"
+            />
             <div class="card-info">
               <div class="card-name">{{ item.card.name }}</div>
-              <div class="card-details">
-                {{ item.card.setCode }} #{{ item.card.collectorNumber }}
-                <span class="confidence-badge">{{ Math.round(item.confidence) }}%</span>
-              </div>
+              <div class="card-set">{{ item.card.setCode }} · #{{ item.card.collectorNumber }}</div>
+              <div class="card-price" v-if="item.card.priceUsd">${{ item.card.priceUsd }}</div>
             </div>
-            <div class="card-actions">
-              <label class="foil-toggle">
+            <div class="card-controls">
+              <button @click="removeFromQueue(scannedCards.length - 1 - index)" class="remove-btn" title="Remove">
+                ×
+              </button>
+              <div class="quantity-control">
+                <button @click="item.quantity = Math.max(1, item.quantity - 1)" class="qty-btn">-</button>
+                <span class="qty-display">{{ item.quantity }}</span>
+                <button @click="item.quantity++" class="qty-btn">+</button>
+              </div>
+              <label class="foil-checkbox" :class="{ checked: item.isFoil }">
                 <input type="checkbox" v-model="item.isFoil" />
-                <span>Foil</span>
+                <span>✨</span>
               </label>
-              <input type="number" v-model="item.quantity" min="1" max="99" class="quantity-input" />
-              <button @click="removeFromQueue(index)" class="remove-btn">×</button>
             </div>
           </div>
         </div>
         <div class="queue-footer">
-          <button @click="clearQueue" class="clear-btn">Clear All</button>
+          <button @click="clearQueue" class="clear-queue-btn">Clear</button>
         </div>
       </div>
 
@@ -121,16 +139,6 @@
         </div>
       </div>
 
-      <div class="manual-input">
-        <h3>Manual Input</h3>
-        <div class="input-group">
-          <input v-model="manualSetCode" placeholder="Set Code (e.g., NEO)" />
-          <input v-model="manualCardNumber" placeholder="Card Number (e.g., 234)" />
-          <button @click="manualSearch" :disabled="!manualSetCode || !manualCardNumber">
-            Search
-          </button>
-        </div>
-      </div>
 
       <!--<div class="processing-settings">
         <h3>Processing Settings</h3>
@@ -156,7 +164,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
+import { ref, onMounted, onUnmounted, watch, computed, inject } from 'vue';
 import scryfallAPI from '../api/scryfall';
 import { preprocessImage, drawRegionGuide, extractCardRegion } from '../utils/imageProcessing';
 import { getEnhancedOCRService, destroyEnhancedOCRService } from '../utils/enhancedOCRService';
@@ -872,10 +880,10 @@ const VISION_AI_COOLDOWN = 3000; // 3 second cooldown between Vision AI calls
 // Two-tier confidence tracking
 let initialCardLocked = false;
 let lockedCardBounds: {x: number, y: number, width: number, height: number} | null = null;
-const INITIAL_MIN_CONFIDENCE = 0.48; // Higher confidence to start tracking
-const SUSTAINED_MIN_CONFIDENCE = 0.40; // Lower confidence once locked on
+const INITIAL_MIN_CONFIDENCE = 0.40; // Higher confidence to start tracking
+const SUSTAINED_MIN_CONFIDENCE = 0.30; // Lower confidence once locked on
 const MAX_POSITION_DRIFT = 50; // Max pixels the card can move between frames
-const MAX_CARD_WIDTH = 400; // Cards shouldn't be wider than this (false detection)
+const MAX_CARD_WIDTH = 600; // Cards shouldn't be wider than this (false detection)
 
 // Watch for card presence and reasonable stability (not perfect stability)
 watch(
@@ -1868,6 +1876,12 @@ async function addAllToCollection() {
       }
     }
     
+    // Refresh collection stats after adding cards
+    const refreshStats = inject('refreshStats') as (() => Promise<void>) | undefined;
+    if (refreshStats) {
+      await refreshStats();
+    }
+    
     alert(`Added ${scannedCards.value.length} unique cards to collection!`);
     clearQueue();
   } catch (error) {
@@ -2282,6 +2296,41 @@ onUnmounted(async () => {
 }
 
 .scan-result,
+.manual-input-compact {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 8px;
+  align-items: center;
+}
+
+.manual-input-compact input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.manual-input-compact button {
+  padding: 8px 20px;
+  background: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.manual-input-compact button:hover:not(:disabled) {
+  background: #45a049;
+}
+
+.manual-input-compact button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
 .manual-input,
 .processing-settings {
   background: #f5f5f5;
@@ -2690,5 +2739,251 @@ onUnmounted(async () => {
   margin-top: 5px;
   min-height: 16px;
   text-align: center;
+}
+
+/* ===== REDESIGNED SCAN QUEUE STYLES ===== */
+/* Override old queue styles with modern design */
+
+.scan-queue {
+  background: #ffffff !important;
+  border: 1px solid #e0e0e0 !important;
+  border-radius: 12px !important;
+  width: 360px !important;
+  max-height: calc(100vh - 160px) !important;
+  display: flex !important;
+  flex-direction: column !important;
+  flex-shrink: 0 !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08) !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+.queue-header {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  padding: 14px 16px !important;
+  border-bottom: 1px solid #e0e0e0 !important;
+  background: #fafafa !important;
+  border-radius: 12px 12px 0 0 !important;
+  margin-bottom: 0 !important;
+}
+
+.queue-header h3 {
+  margin: 0 !important;
+  color: #333 !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+}
+
+.add-all-btn {
+  padding: 6px 14px !important;
+  background: #4CAF50 !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  transition: all 0.2s !important;
+}
+
+.add-all-btn:hover {
+  background: #45a049 !important;
+  transform: translateY(-1px) !important;
+  box-shadow: 0 2px 4px rgba(76, 175, 80, 0.3) !important;
+}
+
+.queue-list {
+  flex: 1 !important;
+  overflow-y: auto !important;
+  padding: 8px !important;
+  max-height: none !important;
+}
+
+.queue-list::-webkit-scrollbar {
+  width: 6px !important;
+}
+
+.queue-list::-webkit-scrollbar-thumb {
+  background: #ddd !important;
+  border-radius: 3px !important;
+}
+
+.queue-card {
+  background: white !important;
+  border: 1px solid #e8e8e8 !important;
+  border-radius: 8px !important;
+  padding: 8px !important;
+  margin-bottom: 6px !important;
+  display: flex !important;
+  gap: 10px !important;
+  align-items: center !important;
+  transition: all 0.2s !important;
+}
+
+.queue-card:hover {
+  border-color: #4CAF50 !important;
+  box-shadow: 0 2px 6px rgba(76, 175, 80, 0.15) !important;
+}
+
+.card-thumbnail {
+  width: 46px !important;
+  height: 64px !important;
+  object-fit: cover !important;
+  border-radius: 4px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2) !important;
+}
+
+.queue-card .card-info {
+  flex: 1 !important;
+  min-width: 0 !important;
+}
+
+.queue-card .card-name {
+  font-weight: 600 !important;
+  font-size: 13px !important;
+  color: #2c3e50 !important;
+  margin-bottom: 2px !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+.card-set {
+  font-size: 11px !important;
+  color: #7f8c8d !important;
+  margin-bottom: 2px !important;
+}
+
+.card-price {
+  font-size: 12px !important;
+  color: #27ae60 !important;
+  font-weight: 600 !important;
+}
+
+.card-controls {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 6px !important;
+  align-items: flex-end !important;
+}
+
+.queue-card .remove-btn {
+  width: 20px !important;
+  height: 20px !important;
+  border-radius: 50% !important;
+  border: none !important;
+  background: #f5f5f5 !important;
+  color: #999 !important;
+  cursor: pointer !important;
+  font-size: 16px !important;
+  line-height: 1 !important;
+  padding: 0 !important;
+  transition: all 0.2s !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.queue-card .remove-btn:hover {
+  background: #ff5252 !important;
+  color: white !important;
+}
+
+.quantity-control {
+  display: flex !important;
+  align-items: center !important;
+  gap: 2px !important;
+  background: #f5f5f5 !important;
+  border-radius: 20px !important;
+  padding: 2px !important;
+}
+
+.qty-btn {
+  width: 18px !important;
+  height: 18px !important;
+  border: none !important;
+  background: transparent !important;
+  cursor: pointer !important;
+  font-size: 11px !important;
+  color: #666 !important;
+  border-radius: 50% !important;
+  transition: background 0.2s !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.qty-btn:hover {
+  background: rgba(0, 0, 0, 0.1) !important;
+}
+
+.qty-display {
+  min-width: 16px !important;
+  text-align: center !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  color: #333 !important;
+}
+
+.foil-checkbox {
+  position: relative !important;
+  cursor: pointer !important;
+  width: 22px !important;
+  height: 22px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: #f5f5f5 !important;
+  border-radius: 50% !important;
+  transition: all 0.2s !important;
+}
+
+.foil-checkbox input {
+  position: absolute !important;
+  opacity: 0 !important;
+  cursor: pointer !important;
+}
+
+.foil-checkbox span {
+  font-size: 12px !important;
+  opacity: 0.3 !important;
+  transition: all 0.2s !important;
+}
+
+.foil-checkbox.checked {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+}
+
+.foil-checkbox.checked span {
+  opacity: 1 !important;
+}
+
+.queue-footer {
+  padding: 10px 16px !important;
+  border-top: 1px solid #e0e0e0 !important;
+  display: flex !important;
+  justify-content: center !important;
+  background: #fafafa !important;
+  border-radius: 0 0 12px 12px !important;
+  margin-top: 0 !important;
+}
+
+.clear-queue-btn {
+  padding: 5px 14px !important;
+  background: white !important;
+  color: #666 !important;
+  border: 1px solid #e0e0e0 !important;
+  border-radius: 6px !important;
+  cursor: pointer !important;
+  font-size: 12px !important;
+  transition: all 0.2s !important;
+}
+
+.clear-queue-btn:hover {
+  background: #ff5252 !important;
+  color: white !important;
+  border-color: #ff5252 !important;
 }
 </style>

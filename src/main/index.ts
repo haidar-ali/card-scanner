@@ -190,6 +190,32 @@ ipcMain.handle('delete-card', async (event, id) => {
   }
 });
 
+// Collection Stats handlers
+ipcMain.handle('get-collection-stats', async () => {
+  const { getDatabase } = await import('../database/connection');
+  const { Card } = await import('../database/entities/Card');
+  
+  try {
+    const db = getDatabase();
+    const repository = db.getRepository(Card);
+    
+    // Get total cards (sum of all quantities)
+    const result = await repository
+      .createQueryBuilder('card')
+      .select('SUM(card.quantity)', 'totalCards')
+      .addSelect('SUM(card.quantity * card.priceUsd)', 'totalValue')
+      .getRawOne();
+    
+    return {
+      totalCards: parseInt(result.totalCards) || 0,
+      totalValue: parseFloat(result.totalValue) || 0
+    };
+  } catch (error) {
+    console.error('Failed to get collection stats:', error);
+    return { totalCards: 0, totalValue: 0 };
+  }
+});
+
 // Scryfall API handler
 ipcMain.handle('fetch-card-data', async (event, setCode, number) => {
   const axios = (await import('axios')).default;

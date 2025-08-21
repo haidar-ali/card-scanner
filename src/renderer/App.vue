@@ -51,15 +51,41 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, provide } from 'vue';
+import { useRouter } from 'vue-router';
 
 const totalCards = ref(0);
 const collectionValue = ref('0.00');
 
+// Function to refresh stats from database
+const refreshStats = async () => {
+  try {
+    const stats = await window.electronAPI.getCollectionStats();
+    totalCards.value = stats.totalCards;
+    collectionValue.value = stats.totalValue.toFixed(2);
+  } catch (error) {
+    console.error('Failed to load collection stats:', error);
+  }
+};
+
+// Provide refresh function to child components
+provide('refreshStats', refreshStats);
+
+// Set up router to refresh stats on navigation
+const router = useRouter();
+router.afterEach((to) => {
+  // Refresh stats when navigating to collection or coming back from scanner
+  if (to.path === '/collection' || to.path === '/') {
+    refreshStats();
+  }
+});
+
 onMounted(async () => {
-  // TODO: Load stats from database
-  totalCards.value = 0;
-  collectionValue.value = '0.00';
+  // Load initial stats from database
+  await refreshStats();
+  
+  // Refresh stats every 30 seconds
+  setInterval(refreshStats, 30000);
 });
 </script>
 
