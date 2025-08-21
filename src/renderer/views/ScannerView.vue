@@ -36,39 +36,40 @@
     </div>
 
     <div class="scanner-content">
-      <div class="video-container">
-        <video ref="videoElement" autoplay playsinline></video>
-        <canvas ref="overlayCanvas" class="overlay-canvas"></canvas>
-        <canvas ref="canvasElement" :style="{ display: showCanvas ? 'block' : 'none' }"></canvas>
-        <canvas ref="processCanvas" style="display: none;"></canvas>
-        
-        <!-- Success checkmark overlay -->
-        <div v-if="showSuccessCheckmark" class="success-checkmark">
-          <div class="checkmark-circle">
-            <svg width="80" height="80" viewBox="0 0 80 80">
-              <circle cx="40" cy="40" r="38" stroke="#4CAF50" stroke-width="4" fill="none" />
-              <path d="M20 40 L32 52 L60 24" stroke="#4CAF50" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+      <div class="left-section">
+        <div class="video-container">
+          <video ref="videoElement" autoplay playsinline></video>
+          <canvas ref="overlayCanvas" class="overlay-canvas"></canvas>
+          <canvas ref="canvasElement" :style="{ display: showCanvas ? 'block' : 'none' }"></canvas>
+          <canvas ref="processCanvas" style="display: none;"></canvas>
+          
+          <!-- Success checkmark overlay -->
+          <div v-if="showSuccessCheckmark" class="success-checkmark">
+            <div class="checkmark-circle">
+              <svg width="80" height="80" viewBox="0 0 80 80">
+                <circle cx="40" cy="40" r="38" stroke="#4CAF50" stroke-width="4" fill="none" />
+                <path d="M20 40 L32 52 L60 24" stroke="#4CAF50" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+            </div>
+            <p>Card scanned! You can change the card now.</p>
           </div>
-          <p>Card scanned! You can change the card now.</p>
         </div>
-      </div>
-      
-      
-      <!-- Debug ROI Panel -->
-      <div v-if="debugMode" class="debug-panel">
-        <h4>ROI Debug View</h4>
-        <div class="debug-images">
-          <div v-for="[field, dataUrl] in debugCanvases" :key="field" class="debug-image">
-            <label>{{ field }}</label>
-            <img v-if="dataUrl && dataUrl.startsWith('data:')" :src="dataUrl" :alt="field" />
-            <div v-else class="no-image">No image</div>
-            <span class="debug-text">{{ streamingHypotheses.get(field)?.value || 'N/A' }}</span>
+        
+        <!-- Debug ROI Panel - Under video -->
+        <div v-if="debugMode" class="debug-panel">
+          <h4>ROI Debug View</h4>
+          <div class="debug-images">
+            <div v-for="[field, dataUrl] in debugCanvases" :key="field" class="debug-image">
+              <label>{{ field }}</label>
+              <img v-if="dataUrl && dataUrl.startsWith('data:')" :src="dataUrl" :alt="field" />
+              <div v-else class="no-image">No image</div>
+              <span class="debug-text">{{ streamingHypotheses.get(field)?.value || 'N/A' }}</span>
+            </div>
           </div>
         </div>
       </div>
 
-      <!-- Scanned Cards Queue -->
+      <!-- Scanned Cards Queue - On the right -->
       <div class="scan-queue" v-if="scannedCards.length > 0">
         <div class="queue-header">
           <h3>Scanned Cards ({{ scannedCards.length }})</h3>
@@ -131,7 +132,7 @@
         </div>
       </div>
 
-      <div class="processing-settings">
+      <!--<div class="processing-settings">
         <h3>Processing Settings</h3>
         <label>
           <input type="checkbox" v-model="showCanvas" /> Show processed image
@@ -149,7 +150,7 @@
           Contrast: <input type="range" v-model.number="settings.contrast" min="0.5" max="3" step="0.1" />
           {{ settings.contrast }}
         </label>
-      </div>
+      </div>-->
     </div>
   </div>
 </template>
@@ -871,8 +872,8 @@ const VISION_AI_COOLDOWN = 3000; // 3 second cooldown between Vision AI calls
 // Two-tier confidence tracking
 let initialCardLocked = false;
 let lockedCardBounds: {x: number, y: number, width: number, height: number} | null = null;
-const INITIAL_MIN_CONFIDENCE = 0.55; // Higher confidence to start tracking
-const SUSTAINED_MIN_CONFIDENCE = 0.45; // Lower confidence once locked on
+const INITIAL_MIN_CONFIDENCE = 0.48; // Higher confidence to start tracking
+const SUSTAINED_MIN_CONFIDENCE = 0.40; // Lower confidence once locked on
 const MAX_POSITION_DRIFT = 50; // Max pixels the card can move between frames
 const MAX_CARD_WIDTH = 400; // Cards shouldn't be wider than this (false detection)
 
@@ -939,11 +940,11 @@ watch(
       const preliminaryBounds = await detectCardBounds(preCheckCanvas);
       
       // Log card detection result
-      if (preliminaryBounds) {
+      /*if (preliminaryBounds) {
         console.log('[Scanner] Card detected with', (preliminaryBounds.confidence * 100).toFixed(0) + '% confidence, required:', INITIAL_MIN_CONFIDENCE);
       } else {
         console.log('[Scanner] No card detected by canvasCardDetector');
-      }
+      }*/
 
       // Bounds validation - reject obvious false detections
       if (preliminaryBounds && preliminaryBounds.width > MAX_CARD_WIDTH) {
@@ -2170,8 +2171,14 @@ onUnmounted(async () => {
 }
 
 .scanner-content {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
+  display: flex;
+  gap: 20px;
+}
+
+.left-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
   gap: 20px;
 }
 
@@ -2466,9 +2473,10 @@ onUnmounted(async () => {
   border: 2px solid #4CAF50;
   border-radius: 8px;
   padding: 15px;
-  margin-bottom: 20px;
-  max-height: 400px;
+  width: 400px;
+  max-height: calc(100vh - 200px);
   overflow-y: auto;
+  flex-shrink: 0;
 }
 
 .queue-header {
@@ -2618,14 +2626,11 @@ onUnmounted(async () => {
 
 /* Debug Panel Styles */
 .debug-panel {
-  margin-top: 20px;
   background: rgba(0, 0, 0, 0.9);
   border: 1px solid #4CAF50;
   border-radius: 8px;
   padding: 10px;
-  width: 960px;
-  margin-left: auto;
-  margin-right: auto;
+  width: 100%;
 }
 
 .debug-panel h4 {

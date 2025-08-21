@@ -206,9 +206,9 @@ export class StreamingOCRService {
             score: metrics.stabilityScore
           });
           
-          if (this.config.debugMode) {
+          /*if (this.config.debugMode) {
             console.log(`[FastLoop] Stability changed: ${metrics.isStable} (score: ${metrics.stabilityScore.toFixed(2)})`);
-          }
+          }*/
         }
       } catch (error) {
         console.error('[FastLoop] Error:', error);
